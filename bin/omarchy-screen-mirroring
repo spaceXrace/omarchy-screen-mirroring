@@ -125,6 +125,7 @@ firewall_comment() {
 open_firewall() {
   local ip=$1
   ufw allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")"
+  ufw allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")"
 }
 
 close_firewall() {

@@ -9,7 +9,7 @@ An Omarchy Quattro bar widget for mirroring a Linux desktop to compatible AirPla
 - One-click reconnect to the last receiver, plus an on/off control in the panel header.
 - PIN and configured-password prompts for protected receivers.
 - Saved extra doubletake arguments, such as `-hwaccel vaapi`.
-- Receiver-specific, temporary UFW UDP rule for `60000:60010` while a stream is active.
+- Receiver-specific, temporary UFW UDP and TCP rules for `60000:60010` while a stream is active.
 
 ## Install
 

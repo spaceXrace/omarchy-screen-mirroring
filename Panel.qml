@@ -323,6 +323,7 @@ Panel {
   }
 
   component ReceiverRow: CursorSurface {
+    id: receiverRow
     required property var receiver
     readonly property bool active: root.connectedIp === (receiver ? receiver.ip : "")
     readonly property bool unavailable: root.busy || root.streaming || root.connecting
@@ -333,13 +334,20 @@ Panel {
     current: active
     hasCursor: hovered
 
+    BorderSurface {
+      anchors.fill: parent
+      visible: receiverRow.hovered
+      color: "transparent"
+      radius: Style.cornerRadius
+      borderSpec: Border.controlSpec("hover-cursor", root.foreground, Color.accent)
+    }
+
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: unavailable ? Qt.ArrowCursor : Qt.PointingHandCursor
-      enabled: !unavailable
-      onContainsMouseChanged: parent.hovered = containsMouse
-      onClicked: if (receiver) root.connectReceiver(receiver.ip)
+      onContainsMouseChanged: receiverRow.hovered = containsMouse
+      onClicked: if (!unavailable && receiver) root.connectReceiver(receiver.ip)
     }
 
     Item {
