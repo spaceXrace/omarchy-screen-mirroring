@@ -269,8 +269,10 @@ Panel {
               model: root.devices
               delegate: ReceiverRow {
                 required property var modelData
+                required property int index
                 width: ListView.view.width
                 receiver: modelData
+                listIndex: index
               }
             }
 
