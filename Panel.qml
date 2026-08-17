@@ -311,7 +311,14 @@ Panel {
               RowLayout {
                 Layout.fillWidth: true
                 Text { Layout.fillWidth: true; text: "Keep receiver ports open"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body }
-                ToggleSwitch { checked: root.permanentPorts; foreground: root.foreground; onToggled: root.savePermanentPorts(checked) }
+                ToggleSwitch {
+                  checked: root.permanentPorts
+                  foreground: root.foreground
+                  onToggled: {
+                    root.permanentPorts = checked
+                    root.savePermanentPorts(checked)
+                  }
+                }
               }
               Text { Layout.fillWidth: true; text: "Keeps receiver-specific ports open after the first approval, so later connections avoid the password prompt."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             }

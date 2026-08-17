@@ -16,6 +16,7 @@ STREAM_INPUT_FILE="$STATE_DIR/stream.input"
 STREAM_LOG_MARK_FILE="$STATE_DIR/stream.log-offset"
 STREAM_CREDENTIAL_SUBMITTED_FILE="$STATE_DIR/stream.credential-submitted"
 CLEANUP_IP_FILE="$STATE_DIR/cleanup.ip"
+CLEANUP_IN_PROGRESS_FILE="$STATE_DIR/cleanup.in-progress"
 LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-screen-mirroring/doubletake.log"
 
 json_error() {
@@ -195,10 +196,12 @@ attempt_port_cleanup() {
   [[ -f "$CLEANUP_IP_FILE" ]] || return 0
   local ip
   ip="$(<"$CLEANUP_IP_FILE")"
+  : > "$CLEANUP_IN_PROGRESS_FILE"
   if close_ports_after_connection "$ip"; then
-    rm -f "$CLEANUP_IP_FILE"
+    rm -f "$CLEANUP_IP_FILE" "$CLEANUP_IN_PROGRESS_FILE"
     return 0
   fi
+  rm -f "$CLEANUP_IN_PROGRESS_FILE"
   return 1
 }
 
@@ -281,7 +284,7 @@ shutdown_if_idle() {
 status() {
   cleanup_finished_stream
   local cleanup_required=false
-  if [[ -f "$CLEANUP_IP_FILE" ]]; then cleanup_required=true; fi
+  if [[ -f "$CLEANUP_IP_FILE" && ! -f "$CLEANUP_IN_PROGRESS_FILE" ]]; then cleanup_required=true; fi
   if stream_running; then
     local ip name credential_kind
     ip="$(<"$STREAM_IP_FILE")"
