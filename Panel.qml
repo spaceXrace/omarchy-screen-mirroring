@@ -299,12 +299,16 @@ Panel {
             PanelSectionHeader { text: "DOUBLETAKE ARGUMENTS"; foreground: root.foreground; fontFamily: root.fontFamily }
             TextField { Layout.fillWidth: true; placeholderText: "For example: -hwaccel vaapi"; text: root.extraArgs; onTextEdited: root.extraArgs = text }
             Text { Layout.fillWidth: true; text: root.vaapiAvailable ? "VA-API encoder available" : "VA-API encoder not detected"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
-            RowLayout {
+            ColumnLayout {
               Layout.fillWidth: true
-              Text { Layout.fillWidth: true; text: "Keep receiver ports open"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body }
-              ToggleSwitch { checked: root.permanentPorts; foreground: root.foreground; onToggled: root.savePermanentPorts(checked) }
+              spacing: Style.space(2)
+              RowLayout {
+                Layout.fillWidth: true
+                Text { Layout.fillWidth: true; text: "Keep receiver ports open"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+                ToggleSwitch { checked: root.permanentPorts; foreground: root.foreground; onToggled: root.savePermanentPorts(checked) }
+              }
+              Text { Layout.fillWidth: true; text: "Keeps receiver-specific ports open after the first approval, so later connections avoid the password prompt."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             }
-            Text { Layout.fillWidth: true; text: "Open ports permanently for each receiver after its first authorization. Turn this off to remove saved rules."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             Button { Layout.fillWidth: true; text: "Save"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.saveExtraArgs() }
           }
         }

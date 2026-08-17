@@ -172,6 +172,28 @@ close_ports_after_connection() {
   pkexec "$0" firewall-close "$ip"
 }
 
+discover() {
+  local response
+  # The daemon writes discovered devices only after its five-second mDNS browse
+  # completes. Keep this request open so the panel's scanning state is honest.
+  for _ in {1..12}; do
+    response="$(ctl devices)"
+    if python - "$response" <<'PY'
+import json, sys
+try:
+    raise SystemExit(0 if json.loads(sys.argv[1]).get("devices") else 1)
+except Exception:
+    raise SystemExit(1)
+PY
+    then
+      printf '%s\n' "$response"
+      return
+    fi
+    sleep 0.5
+  done
+  printf '%s\n' "$response"
+}
+
 disconnect_privileged() {
   local response before ips
   before="$(ctl status || true)"
@@ -231,7 +253,7 @@ case "${1:-}" in
     status
     ;;
   discover)
-    ctl discover
+    discover
     ;;
   connect|connect-privileged)
     ip=${2:-}
@@ -239,17 +261,11 @@ case "${1:-}" in
     open_ports_for_connection "$ip"
     save_settings lastReceiver "$ip"
     if ! response="$(ctl connect "$ip")"; then
-      close_firewall "$ip"
+      close_ports_after_connection "$ip"
       printf '%s\n' "$response"
       exit 1
     fi
     printf '%s\n' "$response"
-    ;;
-  connect)
-    ip=${2:-}
-    [[ -n "$ip" ]] || json_error "Receiver IP is required"
-    save_settings lastReceiver "$ip"
-    ctl connect "$ip"
     ;;
   credential)
     ip=${2:-}
