@@ -5,7 +5,7 @@ An Omarchy Quattro bar widget for mirroring a Linux desktop to compatible AirPla
 ## Features
 
 - Screen mirroring icon in the right status-bar category.
-- Receiver discovery only while the panel is open or when **Reload** is clicked.
+- Receiver discovery starts when the panel opens and when **Reload** is clicked.
 - One-click reconnect to the last receiver, plus an on/off control in the panel header.
 - PIN and configured-password prompts for protected receivers.
 - Saved extra doubletake arguments, such as `-hwaccel vaapi`.
@@ -22,7 +22,7 @@ Open the widget and select **Install dependencies**. It installs the AUR `double
 ## Use
 
 1. Open the status-bar widget and click **Reload** to discover receivers.
-2. Select a receiver. A terminal requests your password to add a UFW rule restricted to that receiver IP, then starts mirroring.
+2. Select a receiver. A graphical Polkit prompt authorizes a UFW rule restricted to that receiver IP, then starts mirroring.
 3. Enter a pairing PIN or receiver password when prompted.
 4. Use **Off** to end mirroring. The helper removes its tagged UFW rules after disconnecting.
 
@@ -36,7 +36,8 @@ Arguments are passed to doubletake when its daemon starts. For example, use `-hw
 
 - The helper starts doubletake only while the panel is in use or a stream is active. A running stream keeps its daemon alive.
 - Doubletake's daemon performs its own mDNS discovery while it is running. The widget does not issue discovery requests while the panel is closed.
-- UFW operations are deliberately opened in a terminal so `sudo` can authenticate normally. No broad firewall rule is added: each rule is limited to the selected receiver IP and is marked with the plugin ID for safe cleanup.
+- UFW operations use the desktop Polkit prompt rather than opening a terminal. No broad firewall rule is added: each rule is limited to the selected receiver IP and is marked with the plugin ID for safe cleanup.
+- **Keep receiver ports open** retains each receiver-specific rule after its first authorization, avoiding later password prompts for that receiver. Turning it off removes all rules retained by this plugin.
 - Screen capture source selection is handled by doubletake.
 
 ## Development

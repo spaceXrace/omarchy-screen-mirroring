@@ -28,6 +28,9 @@ Panel {
   property string credentialKind: ""
   property var devices: []
   property bool showSettings: false
+  property bool scanning: false
+  property bool heroHover: false
+  property bool permanentPorts: false
 
   readonly property string helper: Quickshell.env("HOME") + "/.config/omarchy/plugins/spacexrace.screen-mirroring/bin/omarchy-screen-mirroring"
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -36,6 +39,7 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   function open() {
+    scanning = true
     root.controller.show()
     refreshPanel()
   }
@@ -53,11 +57,13 @@ Panel {
     process.running = true
   }
   function refreshPanel() {
+    if (depsInstalled) scanning = true
     run(depsProc, ["deps"])
     run(statusProc, ["status"])
   }
   function reloadReceivers() {
     if (!depsInstalled) return
+    scanning = true
     run(discoverProc, ["discover"])
   }
   function applyStatus(raw) {
@@ -66,6 +72,7 @@ Panel {
     errorText = data.error || ""
     lastReceiver = data.lastReceiver || lastReceiver
     extraArgs = data.extraArgs !== undefined ? data.extraArgs : extraArgs
+    permanentPorts = data.permanentPorts === true
     var streams = data.streams || []
     streaming = false
     connecting = false
@@ -100,15 +107,12 @@ Panel {
   function connectReceiver(ip) {
     if (!ip || busy) return
     busy = true
-    // UFW needs elevation, so the helper performs the rule add and connect in one terminal action.
-    Quickshell.execDetached(["alacritty", "-e", "bash", "-lc", Model.shellQuote(helper) + " connect-privileged " + Model.shellQuote(ip) + "; read -rp 'Press enter to close...'"])
-    refreshTimer.restart()
+    run(actionProc, ["connect", ip])
   }
   function disconnect() {
     if (busy) return
     busy = true
-    Quickshell.execDetached(["alacritty", "-e", "bash", "-lc", Model.shellQuote(helper) + " disconnect-privileged; read -rp 'Press enter to close...'"])
-    refreshTimer.restart()
+    run(actionProc, ["disconnect"])
   }
   function toggleLast() {
     if (streaming || connecting || credentialTarget) { disconnect(); return }
@@ -116,6 +120,7 @@ Panel {
     else errorText = "Choose a receiver first"
   }
   function saveExtraArgs() { run(actionProc, ["save-extra-args", extraArgs]) }
+  function savePermanentPorts(enabled) { run(actionProc, ["save-permanent-ports", enabled ? "true" : "false"]) }
   function submitCredential() {
     if (!credentialTarget || credentialInput.text.length === 0) return
     run(actionProc, ["credential", credentialTarget, credentialInput.text])
@@ -139,7 +144,7 @@ Panel {
     running: root.busy
     onTriggered: {
       root.run(statusProc, ["status"])
-      if (!root.streaming && !root.connecting && !root.credentialTarget) root.busy = false
+      if (!actionProc.running && !root.streaming && !root.connecting && !root.credentialTarget) root.busy = false
     }
   }
   Process {
@@ -150,6 +155,7 @@ Panel {
       root.depsInstalled = data.installed === true
       root.vaapiAvailable = data.vaapi === true
       if (root.opened && root.depsInstalled) root.reloadReceivers()
+      if (!root.depsInstalled) root.scanning = false
     }
   }
   Process {
@@ -160,7 +166,10 @@ Panel {
   Process {
     id: discoverProc
     stdout: StdioCollector { id: discoverOut }
-    onExited: root.applyDevices(discoverOut.text)
+    onExited: {
+      root.scanning = false
+      root.applyDevices(discoverOut.text)
+    }
   }
   Process {
     id: actionProc
@@ -204,14 +213,15 @@ Panel {
             Item {
               Layout.preferredWidth: Style.space(40)
               Layout.preferredHeight: Style.space(40)
+              BorderSurface { anchors.fill: parent; color: "transparent"; radius: Style.cornerRadius; visible: root.heroHover; borderSpec: Border.controlSpec("hover-cursor", root.foreground, Color.accent) }
               MirrorIcon { anchors.fill: parent; foreground: root.streaming ? root.foreground : root.dim }
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.toggleLast() }
+              MouseArea { anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onContainsMouseChanged: root.heroHover = containsMouse; onClicked: root.toggleLast() }
             }
             ColumnLayout {
               Layout.fillWidth: true
               spacing: Style.space(2)
               Text { Layout.fillWidth: true; text: "Screen Mirroring"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true; elide: Text.ElideRight }
-              Text { Layout.fillWidth: true; text: root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : "NOT CONNECTED"); color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+              Text { Layout.fillWidth: true; text: root.scanning ? "SCANNING FOR RECEIVERS" : (root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : "NOT CONNECTED")); color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
             }
             Button {
               iconText: "󰑐"
@@ -289,6 +299,12 @@ Panel {
             PanelSectionHeader { text: "DOUBLETAKE ARGUMENTS"; foreground: root.foreground; fontFamily: root.fontFamily }
             TextField { Layout.fillWidth: true; placeholderText: "For example: -hwaccel vaapi"; text: root.extraArgs; onTextEdited: root.extraArgs = text }
             Text { Layout.fillWidth: true; text: root.vaapiAvailable ? "VA-API encoder available" : "VA-API encoder not detected"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
+            RowLayout {
+              Layout.fillWidth: true
+              Text { Layout.fillWidth: true; text: "Keep receiver ports open"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+              ToggleSwitch { checked: root.permanentPorts; foreground: root.foreground; onToggled: root.savePermanentPorts(checked) }
+            }
+            Text { Layout.fillWidth: true; text: "Open ports permanently for each receiver after its first authorization. Turn this off to remove saved rules."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             Button { Layout.fillWidth: true; text: "Save"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.saveExtraArgs() }
           }
         }
@@ -306,16 +322,19 @@ Panel {
     required property var receiver
     readonly property bool active: root.connectedIp === (receiver ? receiver.ip : "")
     readonly property bool unavailable: root.busy || root.streaming || root.connecting
+    property bool hovered: false
     width: parent ? parent.width : 0
     implicitHeight: rowBody.implicitHeight + Style.space(8)
     foreground: root.foreground
     current: active
+    hasCursor: hovered
 
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: unavailable ? Qt.ArrowCursor : Qt.PointingHandCursor
       enabled: !unavailable
+      onContainsMouseChanged: parent.hovered = containsMouse
       onClicked: if (receiver) root.connectReceiver(receiver.ip)
     }
 

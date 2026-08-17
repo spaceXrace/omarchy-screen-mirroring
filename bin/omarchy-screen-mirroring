@@ -6,6 +6,7 @@ PORT_RANGE="60000:60010"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/screen-mirroring"
 STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-screen-mirroring"
 SETTINGS_FILE="$CONFIG_DIR/settings.json"
+PERMANENT_IPS_FILE="$CONFIG_DIR/permanent-ips"
 SOCKET="$STATE_DIR/doubletake.sock"
 PID_FILE="$STATE_DIR/doubletake.pid"
 
@@ -120,14 +121,14 @@ firewall_comment() {
 
 open_firewall() {
   local ip=$1
-  sudo ufw allow from "$ip" proto udp to any port "$PORT_RANGE" comment "$(firewall_comment "$ip")"
+  ufw allow from "$ip" proto udp to any port "$PORT_RANGE" comment "$(firewall_comment "$ip")"
 }
 
 close_firewall() {
   local ip=$1 comment number rules
   comment="$(firewall_comment "$ip")"
   while true; do
-    rules="$(sudo ufw status numbered)"
+    rules="$(ufw status numbered)"
     number="$(python - "$comment" "$rules" <<'PY'
 import re, sys
 needle = sys.argv[1]
@@ -141,8 +142,34 @@ print(max(matches) if matches else "")
 PY
 )"
     [[ -n "$number" ]] || break
-    sudo ufw --force delete "$number"
+    ufw --force delete "$number"
   done
+}
+
+permanent_ports_enabled() {
+  [[ "$(settings_value permanentPorts)" == "true" ]]
+}
+
+permanent_ip_exists() {
+  [[ -f "$PERMANENT_IPS_FILE" ]] && grep -Fxq "$1" "$PERMANENT_IPS_FILE"
+}
+
+mark_permanent_ip() {
+  mkdir -p "$CONFIG_DIR"
+  permanent_ip_exists "$1" || printf '%s\n' "$1" >> "$PERMANENT_IPS_FILE"
+}
+
+open_ports_for_connection() {
+  local ip=$1
+  if permanent_ports_enabled && permanent_ip_exists "$ip"; then return; fi
+  pkexec "$0" firewall-open "$ip"
+  if permanent_ports_enabled; then mark_permanent_ip "$ip"; fi
+}
+
+close_ports_after_connection() {
+  local ip=$1
+  permanent_ports_enabled && permanent_ip_exists "$ip" && return
+  pkexec "$0" firewall-close "$ip"
 }
 
 disconnect_privileged() {
@@ -160,7 +187,7 @@ PY
 )"
   response="$(ctl disconnect || true)"
   while IFS= read -r ip; do
-    [[ -z "$ip" ]] || close_firewall "$ip"
+    [[ -z "$ip" ]] || close_ports_after_connection "$ip"
   done <<< "$ips"
   printf '%s\n' "$response"
 }
@@ -180,17 +207,18 @@ status() {
   if daemon_running; then
     local response
     response="$(ctl status)"
-    python - "$response" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" <<'PY'
+    python - "$response" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" <<'PY'
 import json, sys
 data = json.loads(sys.argv[1])
 data["lastReceiver"] = sys.argv[2]
 data["extraArgs"] = sys.argv[3]
+data["permanentPorts"] = sys.argv[4] == "true"
 print(json.dumps(data))
 PY
   else
-    python - "$(settings_value lastReceiver)" "$(settings_value extraArgs)" <<'PY'
+    python - "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" <<'PY'
 import json, sys
-print(json.dumps({"ok": True, "state": "idle", "streams": [], "lastReceiver": sys.argv[1], "extraArgs": sys.argv[2]}))
+print(json.dumps({"ok": True, "state": "idle", "streams": [], "lastReceiver": sys.argv[1], "extraArgs": sys.argv[2], "permanentPorts": sys.argv[3] == "true"}))
 PY
   fi
 }
@@ -205,10 +233,10 @@ case "${1:-}" in
   discover)
     ctl discover
     ;;
-  connect-privileged)
+  connect|connect-privileged)
     ip=${2:-}
     [[ -n "$ip" ]] || json_error "Receiver IP is required"
-    open_firewall "$ip"
+    open_ports_for_connection "$ip"
     save_settings lastReceiver "$ip"
     if ! response="$(ctl connect "$ip")"; then
       close_firewall "$ip"
@@ -230,6 +258,21 @@ case "${1:-}" in
     ctl connect "$ip" "$credential"
     ;;
   disconnect-privileged) disconnect_privileged ;;
+  disconnect) disconnect_privileged ;;
+  firewall-open) open_firewall "${2:-}" ;;
+  firewall-close) close_firewall "${2:-}" ;;
+  save-permanent-ports)
+    enabled=${2:-false}
+    [[ "$enabled" == "true" || "$enabled" == "false" ]] || json_error "Invalid permanent ports setting"
+    if [[ "$enabled" == "false" && -f "$PERMANENT_IPS_FILE" ]]; then
+      while IFS= read -r ip; do
+        [[ -z "$ip" ]] || pkexec "$0" firewall-close "$ip"
+      done < "$PERMANENT_IPS_FILE"
+      rm -f "$PERMANENT_IPS_FILE"
+    fi
+    save_settings permanentPorts "$enabled"
+    status
+    ;;
   shutdown-if-idle) shutdown_if_idle ;;
   status) status ;;
   *) json_error "Unknown command: ${1:-}" ;;
