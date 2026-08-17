@@ -127,6 +127,11 @@ Panel {
     if (lastReceiver) connectReceiver(lastReceiver, "")
     else errorText = "Choose a receiver first"
   }
+  function toggleStream() {
+    if (streamActive) disconnect()
+    else if (lastReceiver) connectReceiver(lastReceiver, "")
+    else errorText = "Choose a receiver first"
+  }
   function saveExtraArgs() { run(actionProc, ["save-extra-args", extraArgs]) }
   function savePermanentPorts(enabled) { run(actionProc, ["save-permanent-ports", enabled ? "true" : "false"]) }
   function closeLeftoverPorts() { run(actionProc, ["close-ports"]) }
@@ -224,7 +229,7 @@ Panel {
               Layout.preferredHeight: Style.space(40)
               BorderSurface { anchors.fill: parent; color: "transparent"; radius: Style.cornerRadius; visible: root.heroHover; borderSpec: Border.controlSpec("hover-cursor", root.foreground, Color.accent) }
               MirrorIcon { anchors.fill: parent; foreground: root.streaming ? root.foreground : root.dim }
-              MouseArea { anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onContainsMouseChanged: root.heroHover = containsMouse; onClicked: root.toggleLast() }
+              MouseArea { anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onContainsMouseChanged: root.heroHover = containsMouse; onClicked: root.toggleStream() }
             }
             ColumnLayout {
               Layout.fillWidth: true
@@ -242,11 +247,24 @@ Panel {
               verticalPadding: Style.space(2)
               onClicked: root.reloadReceivers()
             }
-            ToggleSwitch {
-              checked: root.streamActive
-              foreground: root.foreground
-              onToggled: root.toggleLast()
-              PanelToolTip { visible: parent.containsMouse; text: root.streaming || root.connecting ? "Stop mirroring" : "Mirror to last receiver"; fontFamily: root.fontFamily }
+            Item {
+              implicitWidth: powerSwitch.implicitWidth
+              implicitHeight: powerSwitch.implicitHeight
+              ToggleSwitch {
+                id: powerSwitch
+                anchors.fill: parent
+                checked: root.streamActive
+                interactive: false
+                foreground: root.foreground
+              }
+              MouseArea {
+                id: switchMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.toggleStream()
+              }
+              PanelToolTip { visible: switchMouse.containsMouse; text: root.streamActive ? "Stop mirroring" : "Mirror to last receiver"; fontFamily: root.fontFamily }
             }
           }
 
