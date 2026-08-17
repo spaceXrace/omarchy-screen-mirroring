@@ -335,7 +335,7 @@ Panel {
     implicitHeight: rowBody.implicitHeight + Style.space(8)
     foreground: root.foreground
     current: active
-    hasCursor: hovered || (root.receiverCursorActive && root.receiverIndex === listIndex)
+    hasCursor: !!(hovered || (root.receiverCursorActive && root.receiverIndex === listIndex))
 
     BorderSurface {
       anchors.fill: parent
