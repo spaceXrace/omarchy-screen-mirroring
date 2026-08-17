@@ -18,6 +18,7 @@ Panel {
   property bool vaapiAvailable: false
   property bool streaming: false
   property bool connecting: false
+  property bool streamActive: false
   property bool busy: false
   property string connectedReceiver: ""
   property string connectedIp: ""
@@ -101,6 +102,7 @@ Panel {
         if (!connectedReceiver) connectedReceiver = stream.device || stream.device_ip || "Receiver"
       }
     }
+    streamActive = streaming || connecting || credentialTarget !== ""
   }
   function applyDevices(raw) {
     var data = Model.parseJson(raw, { ok: false, error: "Invalid receiver list" })
@@ -241,7 +243,7 @@ Panel {
               onClicked: root.reloadReceivers()
             }
             ToggleSwitch {
-              checked: root.streaming || root.connecting || root.credentialTarget !== ""
+              checked: root.streamActive
               foreground: root.foreground
               onToggled: root.toggleLast()
               PanelToolTip { visible: parent.containsMouse; text: root.streaming || root.connecting ? "Stop mirroring" : "Mirror to last receiver"; fontFamily: root.fontFamily }
