@@ -315,8 +315,8 @@ Panel {
                   checked: root.permanentPorts
                   foreground: root.foreground
                   onToggled: {
-                    root.permanentPorts = checked
-                    root.savePermanentPorts(checked)
+                    root.permanentPorts = !root.permanentPorts
+                    root.savePermanentPorts(root.permanentPorts)
                   }
                 }
               }
@@ -362,7 +362,6 @@ Panel {
       cursorShape: unavailable ? Qt.ArrowCursor : Qt.PointingHandCursor
       onContainsMouseChanged: {
         receiverRow.hovered = containsMouse
-        if (containsMouse) root.receiverCursorActive = false
       }
       onClicked: if (!unavailable && receiver) root.connectReceiver(receiver.ip, receiver.name)
     }
