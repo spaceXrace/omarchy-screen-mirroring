@@ -12,6 +12,9 @@ SOCKET="$STATE_DIR/doubletake.sock"
 PID_FILE="$STATE_DIR/doubletake.pid"
 STREAM_PID_FILE="$STATE_DIR/stream.pid"
 STREAM_IP_FILE="$STATE_DIR/stream.ip"
+STREAM_INPUT_FILE="$STATE_DIR/stream.input"
+STREAM_LOG_MARK_FILE="$STATE_DIR/stream.log-offset"
+STREAM_CREDENTIAL_SUBMITTED_FILE="$STATE_DIR/stream.credential-submitted"
 LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-screen-mirroring/doubletake.log"
 
 json_error() {
@@ -188,7 +191,26 @@ cleanup_finished_stream() {
   local ip=""
   [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
   [[ -z "$ip" ]] || close_ports_after_connection "$ip"
-  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
+  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+}
+
+stream_credential_kind() {
+  [[ -f "$STREAM_INPUT_FILE" && ! -f "$STREAM_CREDENTIAL_SUBMITTED_FILE" ]] || return 0
+  local offset=0
+  [[ -f "$STREAM_LOG_MARK_FILE" ]] && offset="$(<"$STREAM_LOG_MARK_FILE")"
+  python - "$LOG_FILE" "$offset" <<'PY'
+import sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        f.seek(int(sys.argv[2]))
+        text = f.read().decode("utf-8", "replace").lower()
+except Exception:
+    text = ""
+if "enter the pin shown" in text:
+    print("pin")
+elif "enter the receiver's configured password" in text or "configured password or pairing pin" in text:
+    print("password")
+PY
 }
 
 discover() {
@@ -222,7 +244,7 @@ disconnect_privileged() {
     stream_running && kill -KILL "$(<"$STREAM_PID_FILE")" 2>/dev/null || true
   fi
   [[ -z "$ip" ]] || close_ports_after_connection "$ip"
-  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
+  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
   status
 }
 
@@ -240,17 +262,22 @@ shutdown_if_idle() {
 status() {
   cleanup_finished_stream
   if stream_running; then
-    local ip name
+    local ip name credential_kind
     ip="$(<"$STREAM_IP_FILE")"
     name="$(settings_value lastReceiverName)"
-    python - "$ip" "$name" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" <<'PY'
+    credential_kind="$(stream_credential_kind)"
+    python - "$ip" "$name" "$credential_kind" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" <<'PY'
 import json, sys
-ip, name = sys.argv[1], sys.argv[2]
-print(json.dumps({"ok": True, "state": "streaming", "streams": [{"device": name or ip, "device_ip": ip, "state": "streaming"}], "lastReceiver": sys.argv[3], "extraArgs": sys.argv[4], "permanentPorts": sys.argv[5] == "true"}))
+ip, name, credential_kind = sys.argv[1:4]
+state = "pin_required" if credential_kind else "streaming"
+stream = {"device": name or ip, "device_ip": ip, "state": state}
+if credential_kind:
+    stream["credential_kind"] = credential_kind
+print(json.dumps({"ok": True, "state": state, "streams": [stream], "lastReceiver": sys.argv[4], "extraArgs": sys.argv[5], "permanentPorts": sys.argv[6] == "true"}))
 PY
     return
   fi
-  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
+  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
   if daemon_running; then
     local response
     response="$(ctl status)"
@@ -296,13 +323,18 @@ case "${1:-}" in
       args+=("${parsed[@]}")
     fi
     mkdir -p "$(dirname "$LOG_FILE")"
-    "${args[@]}" >>"$LOG_FILE" 2>&1 &
+    rm -f "$STREAM_INPUT_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+    mkfifo "$STREAM_INPUT_FILE"
+    stat -c %s "$LOG_FILE" 2>/dev/null > "$STREAM_LOG_MARK_FILE" || printf 0 > "$STREAM_LOG_MARK_FILE"
+    exec {stream_input_fd}<>"$STREAM_INPUT_FILE"
+    "${args[@]}" <"$STREAM_INPUT_FILE" >>"$LOG_FILE" 2>&1 &
+    exec {stream_input_fd}>&-
     printf '%s\n' "$!" > "$STREAM_PID_FILE"
     printf '%s\n' "$ip" > "$STREAM_IP_FILE"
     sleep 0.2
     if ! stream_running; then
       close_ports_after_connection "$ip"
-      rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
+      rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
       json_error "doubletake exited before screen capture started"
     fi
     status
@@ -311,7 +343,10 @@ case "${1:-}" in
     ip=${2:-}
     credential=${3:-}
     [[ -n "$ip" && -n "$credential" ]] || json_error "Receiver and credential are required"
-    ctl connect "$ip" "$credential"
+    [[ -f "$STREAM_INPUT_FILE" && "$(<"$STREAM_IP_FILE")" == "$ip" ]] || json_error "No stream is waiting for a credential"
+    printf '%s\n' "$credential" > "$STREAM_INPUT_FILE"
+    : > "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+    status
     ;;
   disconnect-privileged) disconnect_privileged ;;
   disconnect) disconnect_privileged ;;
