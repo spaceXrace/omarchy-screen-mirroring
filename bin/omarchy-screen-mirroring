@@ -216,7 +216,7 @@ cleanup_finished_stream() {
 }
 
 stream_credential_kind() {
-  [[ -f "$STREAM_INPUT_FILE" && ! -f "$STREAM_CREDENTIAL_SUBMITTED_FILE" ]] || return 0
+  [[ -p "$STREAM_INPUT_FILE" && ! -f "$STREAM_CREDENTIAL_SUBMITTED_FILE" ]] || return 0
   local offset=0
   [[ -f "$STREAM_LOG_MARK_FILE" ]] && offset="$(<"$STREAM_LOG_MARK_FILE")"
   python - "$LOG_FILE" "$offset" <<'PY'
