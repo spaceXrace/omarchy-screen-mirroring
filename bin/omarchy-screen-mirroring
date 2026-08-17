@@ -2,13 +2,15 @@
 set -euo pipefail
 
 PLUGIN_ID="spacexrace.screen-mirroring"
-PORT_RANGE="60000:60010"
+DOUBLETAKE_PORT_RANGE="60000-60010"
+UFW_PORT_RANGE="60000:60010"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/screen-mirroring"
 STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-screen-mirroring"
 SETTINGS_FILE="$CONFIG_DIR/settings.json"
 PERMANENT_IPS_FILE="$CONFIG_DIR/permanent-ips"
 SOCKET="$STATE_DIR/doubletake.sock"
 PID_FILE="$STATE_DIR/doubletake.pid"
+LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-screen-mirroring/doubletake.log"
 
 json_error() {
   python - "$1" <<'PY'
@@ -95,13 +97,14 @@ ensure_daemon() {
   rm -f "$SOCKET"
   local extra
   extra="$(settings_value extraArgs)"
-  local -a args=(doubletake -daemonize -socket "$SOCKET" -port-range "$PORT_RANGE")
+  local -a args=(doubletake -daemonize -socket "$SOCKET" -port-range "$DOUBLETAKE_PORT_RANGE")
   if [[ -n "$extra" ]]; then
     local -a parsed=()
     mapfile -t parsed < <(managed_extra_args "$extra") || json_error "Invalid extra arguments"
     args+=("${parsed[@]}")
   fi
-  "${args[@]}" >/dev/null 2>&1 &
+  mkdir -p "$(dirname "$LOG_FILE")"
+  "${args[@]}" >>"$LOG_FILE" 2>&1 &
   printf '%s\n' "$!" > "$PID_FILE"
   for _ in {1..20}; do
     daemon_running && return
@@ -121,7 +124,7 @@ firewall_comment() {
 
 open_firewall() {
   local ip=$1
-  ufw allow from "$ip" proto udp to any port "$PORT_RANGE" comment "$(firewall_comment "$ip")"
+  ufw allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")"
 }
 
 close_firewall() {

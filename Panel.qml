@@ -234,7 +234,7 @@ Panel {
               onClicked: root.reloadReceivers()
             }
             ToggleSwitch {
-              checked: root.streaming || root.connecting || root.credentialTarget
+              checked: root.streaming
               foreground: root.foreground
               onToggled: root.toggleLast()
               PanelToolTip { visible: parent.containsMouse; text: root.streaming || root.connecting ? "Stop mirroring" : "Mirror to last receiver"; fontFamily: root.fontFamily }
