@@ -110,7 +110,7 @@ Panel {
     run(actionProc, ["connect", ip, name || ""])
   }
   function disconnect() {
-    if (busy) return
+    if (actionProc.running) return
     busy = true
     run(actionProc, ["disconnect"])
   }
