@@ -182,6 +182,15 @@ close_ports_after_connection() {
   pkexec "$0" firewall-close "$ip"
 }
 
+cleanup_finished_stream() {
+  [[ -f "$STREAM_PID_FILE" ]] || return 0
+  stream_running && return 0
+  local ip=""
+  [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
+  [[ -z "$ip" ]] || close_ports_after_connection "$ip"
+  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
+}
+
 discover() {
   local response
   # The daemon writes discovered devices only after its five-second mDNS browse
@@ -209,10 +218,11 @@ disconnect_privileged() {
   [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
   if stream_running; then
     kill "$(<"$STREAM_PID_FILE")" 2>/dev/null || true
-    for _ in {1..20}; do stream_running || break; sleep 0.1; done
+    for _ in {1..50}; do stream_running || break; sleep 0.1; done
+    stream_running && kill -KILL "$(<"$STREAM_PID_FILE")" 2>/dev/null || true
   fi
-  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
   [[ -z "$ip" ]] || close_ports_after_connection "$ip"
+  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
   status
 }
 
@@ -228,6 +238,7 @@ shutdown_if_idle() {
 }
 
 status() {
+  cleanup_finished_stream
   if stream_running; then
     local ip name
     ip="$(<"$STREAM_IP_FILE")"

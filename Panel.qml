@@ -325,6 +325,7 @@ Panel {
   component ReceiverRow: CursorSurface {
     id: receiverRow
     required property var receiver
+    required property int listIndex
     readonly property bool active: root.connectedIp === (receiver ? receiver.ip : "")
     readonly property bool unavailable: root.busy || root.streaming || root.connecting
     property bool hovered: false
@@ -332,7 +333,7 @@ Panel {
     implicitHeight: rowBody.implicitHeight + Style.space(8)
     foreground: root.foreground
     current: active
-    hasCursor: hovered
+    hasCursor: hovered || (root.receiverCursorActive && root.receiverIndex === listIndex)
 
     BorderSurface {
       anchors.fill: parent
@@ -346,7 +347,10 @@ Panel {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: unavailable ? Qt.ArrowCursor : Qt.PointingHandCursor
-      onContainsMouseChanged: receiverRow.hovered = containsMouse
+      onContainsMouseChanged: {
+        receiverRow.hovered = containsMouse
+        if (containsMouse) root.receiverCursorActive = false
+      }
       onClicked: if (!unavailable && receiver) root.connectReceiver(receiver.ip, receiver.name)
     }
 
@@ -357,7 +361,7 @@ Panel {
       anchors.leftMargin: Style.space(10)
       anchors.rightMargin: Style.space(10)
       implicitHeight: Math.max(receiverIcon.height, receiverInfo.implicitHeight) + Style.space(8)
-      MirrorIcon { id: receiverIcon; width: Style.space(20); height: Style.space(20); anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; foreground: active ? root.foreground : root.dim }
+      Text { id: receiverIcon; width: Style.space(20); height: Style.space(20); anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "󰀵"; color: active ? root.foreground : root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.title; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
       Column {
         id: receiverInfo
         anchors.left: receiverIcon.right
