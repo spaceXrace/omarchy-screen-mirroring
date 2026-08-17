@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "spacexrace.screen-mirroring",
+  "name": "Screen Mirroring",
+  "version": "0.1.0",
+  "author": "spaceXrace",
+  "license": "MIT",
+  "description": "Mirror your Linux desktop to discovered AirPlay receivers from the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Screen Mirroring",
+    "description": "Discover and mirror to compatible screen receivers.",
+    "category": "Network",
+    "defaultSection": "right",
+    "allowMultiple": false,
+    "defaults": {},
+    "schema": []
+  }
+}

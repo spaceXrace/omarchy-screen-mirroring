@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_ID="spacexrace.screen-mirroring"
+PORT_RANGE="60000:60010"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/screen-mirroring"
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-screen-mirroring"
+SETTINGS_FILE="$CONFIG_DIR/settings.json"
+SOCKET="$STATE_DIR/doubletake.sock"
+PID_FILE="$STATE_DIR/doubletake.pid"
+
+json_error() {
+  python - "$1" <<'PY'
+import json, sys
+print(json.dumps({"ok": False, "error": sys.argv[1]}))
+PY
+  exit 1
+}
+
+settings_value() {
+  local key=$1
+  [[ -f "$SETTINGS_FILE" ]] || return 0
+  python - "$SETTINGS_FILE" "$key" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+    print(data.get(sys.argv[2], ""))
+except Exception:
+    pass
+PY
+}
+
+save_settings() {
+  mkdir -p "$CONFIG_DIR"
+  python - "$SETTINGS_FILE" "$1" "$2" <<'PY'
+import json, os, sys, tempfile
+path, key, value = sys.argv[1:]
+data = {}
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    pass
+data[key] = value
+fd, temporary = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".settings-")
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(data, f)
+    f.write("\n")
+os.replace(temporary, path)
+PY
+}
+
+managed_extra_args() {
+  local raw=$1
+  python - "$raw" <<'PY'
+import shlex, sys
+try:
+    args = shlex.split(sys.argv[1])
+except ValueError as error:
+    print(error, file=sys.stderr)
+    sys.exit(2)
+managed = {"-daemonize", "-socket", "-port-range"}
+for arg in args:
+    if arg in managed or any(arg.startswith(option + "=") for option in managed):
+        print("extra arguments cannot override " + arg.split("=", 1)[0], file=sys.stderr)
+        sys.exit(2)
+for arg in args:
+    print(arg)
+PY
+}
+
+deps() {
+  python <<'PY'
+import json, shutil, subprocess
+packages = ["doubletake", "gstreamer", "gst-plugins-base", "gst-plugins-good", "gst-plugins-bad", "gst-plugins-ugly", "gst-libav", "gst-plugin-va", "libva-utils"]
+missing = [name for name in ("doubletake", "doubletake-ctl", "gst-inspect-1.0", "vainfo") if not shutil.which(name)]
+vaapi = False
+if not missing:
+    vaapi = subprocess.run(["gst-inspect-1.0", "vah264enc"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+print(json.dumps({"ok": True, "installed": not missing, "missing": missing, "vaapi": vaapi, "packages": packages}))
+PY
+}
+
+daemon_running() {
+  [[ -S "$SOCKET" ]] && doubletake-ctl -socket "$SOCKET" status >/dev/null 2>&1
+}
+
+ensure_daemon() {
+  command -v doubletake >/dev/null || json_error "doubletake is not installed"
+  command -v doubletake-ctl >/dev/null || json_error "doubletake-ctl is not installed"
+  daemon_running && return
+  mkdir -p "$STATE_DIR"
+  rm -f "$SOCKET"
+  local extra
+  extra="$(settings_value extraArgs)"
+  local -a args=(doubletake -daemonize -socket "$SOCKET" -port-range "$PORT_RANGE")
+  if [[ -n "$extra" ]]; then
+    local -a parsed=()
+    mapfile -t parsed < <(managed_extra_args "$extra") || json_error "Invalid extra arguments"
+    args+=("${parsed[@]}")
+  fi
+  "${args[@]}" >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$PID_FILE"
+  for _ in {1..20}; do
+    daemon_running && return
+    sleep 0.15
+  done
+  json_error "Unable to start doubletake"
+}
+
+ctl() {
+  ensure_daemon
+  doubletake-ctl -socket "$SOCKET" "$@"
+}
+
+firewall_comment() {
+  printf '%s-%s' "$PLUGIN_ID" "$1"
+}
+
+open_firewall() {
+  local ip=$1
+  sudo ufw allow from "$ip" proto udp to any port "$PORT_RANGE" comment "$(firewall_comment "$ip")"
+}
+
+close_firewall() {
+  local ip=$1 comment number rules
+  comment="$(firewall_comment "$ip")"
+  while true; do
+    rules="$(sudo ufw status numbered)"
+    number="$(python - "$comment" "$rules" <<'PY'
+import re, sys
+needle = sys.argv[1]
+matches = []
+for line in sys.argv[2].splitlines():
+    if needle in line:
+        match = re.search(r"\[\s*(\d+)\]", line)
+        if match:
+            matches.append(int(match.group(1)))
+print(max(matches) if matches else "")
+PY
+)"
+    [[ -n "$number" ]] || break
+    sudo ufw --force delete "$number"
+  done
+}
+
+disconnect_privileged() {
+  local response before ips
+  before="$(ctl status || true)"
+  ips="$(python - "$before" <<'PY'
+import json, sys
+try:
+    for stream in json.loads(sys.argv[1]).get("streams", []):
+        if stream.get("device_ip"):
+            print(stream["device_ip"])
+except Exception:
+    pass
+PY
+)"
+  response="$(ctl disconnect || true)"
+  while IFS= read -r ip; do
+    [[ -z "$ip" ]] || close_firewall "$ip"
+  done <<< "$ips"
+  printf '%s\n' "$response"
+}
+
+shutdown_if_idle() {
+  daemon_running || return 0
+  local state
+  state="$(doubletake-ctl -socket "$SOCKET" status | python -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))' 2>/dev/null || true)"
+  [[ "$state" == "idle" ]] || return 0
+  if [[ -f "$PID_FILE" ]]; then
+    kill "$(<"$PID_FILE")" 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE" "$SOCKET"
+}
+
+status() {
+  if daemon_running; then
+    local response
+    response="$(ctl status)"
+    python - "$response" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+data["lastReceiver"] = sys.argv[2]
+data["extraArgs"] = sys.argv[3]
+print(json.dumps(data))
+PY
+  else
+    python - "$(settings_value lastReceiver)" "$(settings_value extraArgs)" <<'PY'
+import json, sys
+print(json.dumps({"ok": True, "state": "idle", "streams": [], "lastReceiver": sys.argv[1], "extraArgs": sys.argv[2]}))
+PY
+  fi
+}
+
+case "${1:-}" in
+  deps) deps ;;
+  save-extra-args)
+    save_settings extraArgs "${2:-}"
+    shutdown_if_idle
+    status
+    ;;
+  discover)
+    ctl discover
+    ;;
+  connect-privileged)
+    ip=${2:-}
+    [[ -n "$ip" ]] || json_error "Receiver IP is required"
+    open_firewall "$ip"
+    save_settings lastReceiver "$ip"
+    if ! response="$(ctl connect "$ip")"; then
+      close_firewall "$ip"
+      printf '%s\n' "$response"
+      exit 1
+    fi
+    printf '%s\n' "$response"
+    ;;
+  connect)
+    ip=${2:-}
+    [[ -n "$ip" ]] || json_error "Receiver IP is required"
+    save_settings lastReceiver "$ip"
+    ctl connect "$ip"
+    ;;
+  credential)
+    ip=${2:-}
+    credential=${3:-}
+    [[ -n "$ip" && -n "$credential" ]] || json_error "Receiver and credential are required"
+    ctl connect "$ip" "$credential"
+    ;;
+  disconnect-privileged) disconnect_privileged ;;
+  shutdown-if-idle) shutdown_if_idle ;;
+  status) status ;;
+  *) json_error "Unknown command: ${1:-}" ;;
+esac
