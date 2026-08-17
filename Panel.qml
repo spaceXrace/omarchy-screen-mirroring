@@ -31,6 +31,7 @@ Panel {
   property bool scanning: false
   property bool heroHover: false
   property bool permanentPorts: false
+  property bool cleanupRequired: false
 
   readonly property string helper: Quickshell.env("HOME") + "/.config/omarchy/plugins/spacexrace.screen-mirroring/bin/omarchy-screen-mirroring"
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -69,7 +70,8 @@ Panel {
   function applyStatus(raw) {
     var data = Model.parseJson(raw, { ok: false, error: "Invalid response" })
     if (!data.ok) { errorText = data.error || "Screen mirroring status unavailable"; return }
-    errorText = data.error || ""
+    cleanupRequired = data.cleanupRequired === true
+    errorText = data.error || (cleanupRequired ? "Temporary firewall rules remain after the stream stopped." : "")
     lastReceiver = data.lastReceiver || lastReceiver
     extraArgs = data.extraArgs !== undefined ? data.extraArgs : extraArgs
     permanentPorts = data.permanentPorts === true
@@ -121,6 +123,7 @@ Panel {
   }
   function saveExtraArgs() { run(actionProc, ["save-extra-args", extraArgs]) }
   function savePermanentPorts(enabled) { run(actionProc, ["save-permanent-ports", enabled ? "true" : "false"]) }
+  function closeLeftoverPorts() { run(actionProc, ["close-ports"]) }
   function submitCredential() {
     if (!credentialTarget || credentialInput.text.length === 0) return
     run(actionProc, ["credential", credentialTarget, credentialInput.text])
@@ -286,6 +289,7 @@ Panel {
               Button { Layout.fillWidth: true; text: "Continue"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.submitCredential() }
             }
             Button { Layout.fillWidth: true; text: "Settings"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.showSettings = true }
+            Button { visible: root.cleanupRequired; Layout.fillWidth: true; text: "Remove leftover firewall rules"; bordered: true; foreground: root.urgent; fontFamily: root.fontFamily; onClicked: root.closeLeftoverPorts() }
           }
 
           ColumnLayout {

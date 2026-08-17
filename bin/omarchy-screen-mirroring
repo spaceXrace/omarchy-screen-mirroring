@@ -15,6 +15,7 @@ STREAM_IP_FILE="$STATE_DIR/stream.ip"
 STREAM_INPUT_FILE="$STATE_DIR/stream.input"
 STREAM_LOG_MARK_FILE="$STATE_DIR/stream.log-offset"
 STREAM_CREDENTIAL_SUBMITTED_FILE="$STATE_DIR/stream.credential-submitted"
+CLEANUP_IP_FILE="$STATE_DIR/cleanup.ip"
 LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-screen-mirroring/doubletake.log"
 
 json_error() {
@@ -133,8 +134,8 @@ firewall_comment() {
 
 open_firewall() {
   local ip=$1
-  ufw allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")"
-  ufw allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")"
+  ufw allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null
+  ufw allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null
 }
 
 close_firewall() {
@@ -155,7 +156,7 @@ print(max(matches) if matches else "")
 PY
 )"
     [[ -n "$number" ]] || break
-    ufw --force delete "$number"
+    ufw --force delete "$number" >/dev/null
   done
 }
 
@@ -185,15 +186,30 @@ close_ports_after_connection() {
   pkexec "$0" firewall-close "$ip"
 }
 
+queue_port_cleanup() {
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$1" > "$CLEANUP_IP_FILE"
+}
+
+attempt_port_cleanup() {
+  [[ -f "$CLEANUP_IP_FILE" ]] || return 0
+  local ip
+  ip="$(<"$CLEANUP_IP_FILE")"
+  if close_ports_after_connection "$ip"; then
+    rm -f "$CLEANUP_IP_FILE"
+    return 0
+  fi
+  return 1
+}
+
 cleanup_finished_stream() {
   [[ -f "$STREAM_PID_FILE" ]] || return 0
   stream_running && return 0
   local ip=""
   [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
-  # A dismissed Polkit dialog must not prevent the UI from learning that the
-  # stream has ended. The tagged rule remains available for a later retry.
-  [[ -z "$ip" ]] || close_ports_after_connection "$ip" || true
+  [[ -z "$ip" ]] || queue_port_cleanup "$ip"
   rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+  attempt_port_cleanup || true
 }
 
 stream_credential_kind() {
@@ -245,8 +261,9 @@ disconnect_privileged() {
     for _ in {1..50}; do stream_running || break; sleep 0.1; done
     stream_running && kill -KILL "$(<"$STREAM_PID_FILE")" 2>/dev/null || true
   fi
-  [[ -z "$ip" ]] || close_ports_after_connection "$ip" || true
+  [[ -z "$ip" ]] || queue_port_cleanup "$ip"
   rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+  attempt_port_cleanup || true
   status
 }
 
@@ -263,19 +280,21 @@ shutdown_if_idle() {
 
 status() {
   cleanup_finished_stream
+  local cleanup_required=false
+  if [[ -f "$CLEANUP_IP_FILE" ]]; then cleanup_required=true; fi
   if stream_running; then
     local ip name credential_kind
     ip="$(<"$STREAM_IP_FILE")"
     name="$(settings_value lastReceiverName)"
     credential_kind="$(stream_credential_kind)"
-    python - "$ip" "$name" "$credential_kind" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" <<'PY'
+    python - "$ip" "$name" "$credential_kind" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
 import json, sys
 ip, name, credential_kind = sys.argv[1:4]
 state = "pin_required" if credential_kind else "streaming"
 stream = {"device": name or ip, "device_ip": ip, "state": state}
 if credential_kind:
     stream["credential_kind"] = credential_kind
-print(json.dumps({"ok": True, "state": state, "streams": [stream], "lastReceiver": sys.argv[4], "extraArgs": sys.argv[5], "permanentPorts": sys.argv[6] == "true"}))
+print(json.dumps({"ok": True, "state": state, "streams": [stream], "lastReceiver": sys.argv[4], "extraArgs": sys.argv[5], "permanentPorts": sys.argv[6] == "true", "cleanupRequired": sys.argv[7] == "true"}))
 PY
     return
   fi
@@ -283,18 +302,19 @@ PY
   if daemon_running; then
     local response
     response="$(ctl status)"
-    python - "$response" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" <<'PY'
+    python - "$response" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
 import json, sys
 data = json.loads(sys.argv[1])
 data["lastReceiver"] = sys.argv[2]
 data["extraArgs"] = sys.argv[3]
 data["permanentPorts"] = sys.argv[4] == "true"
+data["cleanupRequired"] = sys.argv[5] == "true"
 print(json.dumps(data))
 PY
   else
-    python - "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" <<'PY'
+    python - "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
 import json, sys
-print(json.dumps({"ok": True, "state": "idle", "streams": [], "lastReceiver": sys.argv[1], "extraArgs": sys.argv[2], "permanentPorts": sys.argv[3] == "true"}))
+print(json.dumps({"ok": True, "state": "idle", "streams": [], "lastReceiver": sys.argv[1], "extraArgs": sys.argv[2], "permanentPorts": sys.argv[3] == "true", "cleanupRequired": sys.argv[4] == "true"}))
 PY
   fi
 }
@@ -352,6 +372,10 @@ case "${1:-}" in
     ;;
   disconnect-privileged) disconnect_privileged ;;
   disconnect) disconnect_privileged ;;
+  close-ports)
+    attempt_port_cleanup || true
+    status
+    ;;
   firewall-open) open_firewall "${2:-}" ;;
   firewall-close) close_firewall "${2:-}" ;;
   save-permanent-ports)
