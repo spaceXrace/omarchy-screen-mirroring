@@ -368,7 +368,7 @@ case "${1:-}" in
     ip=${2:-}
     credential=${3:-}
     [[ -n "$ip" && -n "$credential" ]] || json_error "Receiver and credential are required"
-    [[ -f "$STREAM_INPUT_FILE" && "$(<"$STREAM_IP_FILE")" == "$ip" ]] || json_error "No stream is waiting for a credential"
+    [[ -p "$STREAM_INPUT_FILE" && "$(<"$STREAM_IP_FILE")" == "$ip" ]] || json_error "No stream is waiting for a credential"
     printf '%s\n' "$credential" > "$STREAM_INPUT_FILE"
     : > "$STREAM_CREDENTIAL_SUBMITTED_FILE"
     status
