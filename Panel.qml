@@ -303,7 +303,13 @@ Panel {
               Button { text: "Back"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.showSettings = false }
             }
             PanelSectionHeader { text: "DOUBLETAKE ARGUMENTS"; foreground: root.foreground; fontFamily: root.fontFamily }
-            TextField { Layout.fillWidth: true; placeholderText: "For example: -hwaccel vaapi"; text: root.extraArgs; onTextEdited: root.extraArgs = text }
+            TextField {
+              Layout.fillWidth: true
+              placeholderText: "For example: -hwaccel vaapi"
+              text: root.extraArgs
+              onTextEdited: root.extraArgs = text
+              onEditingFinished: root.saveExtraArgs()
+            }
             Text { Layout.fillWidth: true; text: root.vaapiAvailable ? "VA-API encoder available" : "VA-API encoder not detected"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
             ColumnLayout {
               Layout.fillWidth: true
@@ -322,7 +328,6 @@ Panel {
               }
               Text { Layout.fillWidth: true; text: "Keeps receiver-specific ports open after the first approval, so later connections avoid the password prompt."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             }
-            Button { Layout.fillWidth: true; text: "Save"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.saveExtraArgs() }
           }
         }
       }
@@ -343,7 +348,7 @@ Panel {
     readonly property bool unavailable: root.busy || root.streaming || root.connecting
     property bool hovered: false
     width: parent ? parent.width : 0
-    implicitHeight: rowBody.implicitHeight + Style.space(8)
+    implicitHeight: rowBody.implicitHeight + Style.space(12)
     foreground: root.foreground
     current: active
     hasCursor: !!(hovered || (root.receiverCursorActive && root.receiverIndex === listIndex))
@@ -370,9 +375,12 @@ Panel {
       id: rowBody
       anchors.left: parent.left
       anchors.right: parent.right
+      anchors.top: parent.top
       anchors.leftMargin: Style.space(10)
       anchors.rightMargin: Style.space(10)
-      implicitHeight: Math.max(receiverIcon.height, receiverInfo.implicitHeight) + Style.space(8)
+      anchors.topMargin: Style.space(6)
+      height: implicitHeight
+      implicitHeight: Math.max(receiverIcon.height, receiverInfo.implicitHeight, receiverState.height)
       Text { id: receiverIcon; width: Style.space(20); height: Style.space(20); anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "󰀵"; color: active ? root.foreground : root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.title; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
       Column {
         id: receiverInfo
