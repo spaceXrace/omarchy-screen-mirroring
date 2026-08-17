@@ -215,11 +215,13 @@ cleanup_finished_stream() {
   attempt_port_cleanup || true
 }
 
-stream_credential_kind() {
-  [[ -p "$STREAM_INPUT_FILE" && ! -f "$STREAM_CREDENTIAL_SUBMITTED_FILE" ]] || return 0
+stream_connection_state() {
+  [[ -p "$STREAM_INPUT_FILE" ]] || return 0
   local offset=0
   [[ -f "$STREAM_LOG_MARK_FILE" ]] && offset="$(<"$STREAM_LOG_MARK_FILE")"
-  python - "$LOG_FILE" "$offset" <<'PY'
+  local submitted=false
+  [[ -f "$STREAM_CREDENTIAL_SUBMITTED_FILE" ]] && submitted=true
+  python - "$LOG_FILE" "$offset" "$submitted" <<'PY'
 import sys
 try:
     with open(sys.argv[1], "rb") as f:
@@ -227,10 +229,15 @@ try:
         text = f.read().decode("utf-8", "replace").lower()
 except Exception:
     text = ""
-if "enter the pin shown" in text:
-    print("pin")
-elif "enter the receiver's configured password" in text or "configured password or pairing pin" in text:
-    print("password")
+submitted = sys.argv[3] == "true"
+if not submitted and "enter the pin shown" in text:
+    print("pin_required pin")
+elif not submitted and ("enter the receiver's configured password" in text or "configured password or pairing pin" in text):
+    print("pin_required password")
+elif "screen capture started" in text:
+    print("streaming")
+else:
+    print("connecting")
 PY
 }
 
@@ -286,18 +293,20 @@ status() {
   local cleanup_required=false
   if [[ -f "$CLEANUP_IP_FILE" && ! -f "$CLEANUP_IN_PROGRESS_FILE" ]]; then cleanup_required=true; fi
   if stream_running; then
-    local ip name credential_kind
+    local ip name connection_state connection_state_raw credential_kind
     ip="$(<"$STREAM_IP_FILE")"
     name="$(settings_value lastReceiverName)"
-    credential_kind="$(stream_credential_kind)"
-    python - "$ip" "$name" "$credential_kind" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
+    connection_state_raw="$(stream_connection_state)"
+    connection_state="${connection_state_raw%% *}"
+    credential_kind="${connection_state_raw#pin_required }"
+    [[ "$connection_state" == pin_required* ]] || credential_kind=""
+    python - "$ip" "$name" "$connection_state" "$credential_kind" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
 import json, sys
-ip, name, credential_kind = sys.argv[1:4]
-state = "pin_required" if credential_kind else "streaming"
+ip, name, state, credential_kind = sys.argv[1:5]
 stream = {"device": name or ip, "device_ip": ip, "state": state}
 if credential_kind:
     stream["credential_kind"] = credential_kind
-print(json.dumps({"ok": True, "state": state, "streams": [stream], "lastReceiver": sys.argv[4], "extraArgs": sys.argv[5], "permanentPorts": sys.argv[6] == "true", "cleanupRequired": sys.argv[7] == "true"}))
+print(json.dumps({"ok": True, "state": state, "streams": [stream], "lastReceiver": sys.argv[5], "extraArgs": sys.argv[6], "permanentPorts": sys.argv[7] == "true", "cleanupRequired": sys.argv[8] == "true"}))
 PY
     return
   fi

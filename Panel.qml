@@ -90,6 +90,10 @@ Panel {
         connectedIp = stream.device_ip || ""
       }
       if (stream.state === "connecting") connecting = true
+      if (stream.state === "connecting" && !connectedReceiver) {
+        connectedReceiver = stream.device || stream.device_ip || "Receiver"
+        connectedIp = stream.device_ip || ""
+      }
       if (stream.state === "pin_required" || stream.credential_kind) {
         connecting = true
         credentialTarget = stream.device_ip || ""
@@ -224,7 +228,7 @@ Panel {
               Layout.fillWidth: true
               spacing: Style.space(2)
               Text { Layout.fillWidth: true; text: "Screen Mirroring"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true; elide: Text.ElideRight }
-              Text { Layout.fillWidth: true; text: root.scanning ? "SCANNING FOR RECEIVERS" : (root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : "NOT CONNECTED")); color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+              Text { Layout.fillWidth: true; text: root.scanning ? "SCANNING FOR RECEIVERS" : (root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : (root.connecting ? "CONNECTING TO " + root.connectedReceiver.toUpperCase() : "NOT CONNECTED"))); color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
             }
             Button {
               iconText: "󰑐"
@@ -237,7 +241,7 @@ Panel {
               onClicked: root.reloadReceivers()
             }
             ToggleSwitch {
-              checked: root.streaming
+              checked: root.streaming || root.connecting || root.credentialTarget
               foreground: root.foreground
               onToggled: root.toggleLast()
               PanelToolTip { visible: parent.containsMouse; text: root.streaming || root.connecting ? "Stop mirroring" : "Mirror to last receiver"; fontFamily: root.fontFamily }
