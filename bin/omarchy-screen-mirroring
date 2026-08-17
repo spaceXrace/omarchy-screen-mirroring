@@ -10,6 +10,8 @@ SETTINGS_FILE="$CONFIG_DIR/settings.json"
 PERMANENT_IPS_FILE="$CONFIG_DIR/permanent-ips"
 SOCKET="$STATE_DIR/doubletake.sock"
 PID_FILE="$STATE_DIR/doubletake.pid"
+STREAM_PID_FILE="$STATE_DIR/stream.pid"
+STREAM_IP_FILE="$STATE_DIR/stream.ip"
 LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-screen-mirroring/doubletake.log"
 
 json_error() {
@@ -87,6 +89,10 @@ PY
 
 daemon_running() {
   [[ -S "$SOCKET" ]] && doubletake-ctl -socket "$SOCKET" status >/dev/null 2>&1
+}
+
+stream_running() {
+  [[ -f "$STREAM_PID_FILE" ]] && kill -0 "$(<"$STREAM_PID_FILE")" 2>/dev/null
 }
 
 ensure_daemon() {
@@ -199,23 +205,15 @@ PY
 }
 
 disconnect_privileged() {
-  local response before ips
-  before="$(ctl status || true)"
-  ips="$(python - "$before" <<'PY'
-import json, sys
-try:
-    for stream in json.loads(sys.argv[1]).get("streams", []):
-        if stream.get("device_ip"):
-            print(stream["device_ip"])
-except Exception:
-    pass
-PY
-)"
-  response="$(ctl disconnect || true)"
-  while IFS= read -r ip; do
-    [[ -z "$ip" ]] || close_ports_after_connection "$ip"
-  done <<< "$ips"
-  printf '%s\n' "$response"
+  local ip=""
+  [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
+  if stream_running; then
+    kill "$(<"$STREAM_PID_FILE")" 2>/dev/null || true
+    for _ in {1..20}; do stream_running || break; sleep 0.1; done
+  fi
+  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
+  [[ -z "$ip" ]] || close_ports_after_connection "$ip"
+  status
 }
 
 shutdown_if_idle() {
@@ -230,6 +228,18 @@ shutdown_if_idle() {
 }
 
 status() {
+  if stream_running; then
+    local ip name
+    ip="$(<"$STREAM_IP_FILE")"
+    name="$(settings_value lastReceiverName)"
+    python - "$ip" "$name" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" <<'PY'
+import json, sys
+ip, name = sys.argv[1], sys.argv[2]
+print(json.dumps({"ok": True, "state": "streaming", "streams": [{"device": name or ip, "device_ip": ip, "state": "streaming"}], "lastReceiver": sys.argv[3], "extraArgs": sys.argv[4], "permanentPorts": sys.argv[5] == "true"}))
+PY
+    return
+  fi
+  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
   if daemon_running; then
     local response
     response="$(ctl status)"
@@ -261,15 +271,30 @@ case "${1:-}" in
     ;;
   connect|connect-privileged)
     ip=${2:-}
+    name=${3:-}
     [[ -n "$ip" ]] || json_error "Receiver IP is required"
+    stream_running && json_error "A screen mirroring stream is already active"
+    shutdown_if_idle
     open_ports_for_connection "$ip"
     save_settings lastReceiver "$ip"
-    if ! response="$(ctl connect "$ip")"; then
-      close_ports_after_connection "$ip"
-      printf '%s\n' "$response"
-      exit 1
+    save_settings lastReceiverName "$name"
+    extra="$(settings_value extraArgs)"
+    args=(doubletake -target "$ip" -port-range "$DOUBLETAKE_PORT_RANGE")
+    if [[ -n "$extra" ]]; then
+      mapfile -t parsed < <(managed_extra_args "$extra") || json_error "Invalid extra arguments"
+      args+=("${parsed[@]}")
     fi
-    printf '%s\n' "$response"
+    mkdir -p "$(dirname "$LOG_FILE")"
+    "${args[@]}" >>"$LOG_FILE" 2>&1 &
+    printf '%s\n' "$!" > "$STREAM_PID_FILE"
+    printf '%s\n' "$ip" > "$STREAM_IP_FILE"
+    sleep 0.2
+    if ! stream_running; then
+      close_ports_after_connection "$ip"
+      rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE"
+      json_error "doubletake exited before screen capture started"
+    fi
+    status
     ;;
   credential)
     ip=${2:-}

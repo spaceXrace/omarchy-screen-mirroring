@@ -104,10 +104,10 @@ Panel {
   function installDependencies() {
     Quickshell.execDetached(["alacritty", "-e", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils; omarchy pkg aur add doubletake; read -rp 'Press enter to close...'"])
   }
-  function connectReceiver(ip) {
+  function connectReceiver(ip, name) {
     if (!ip || busy) return
     busy = true
-    run(actionProc, ["connect", ip])
+    run(actionProc, ["connect", ip, name || ""])
   }
   function disconnect() {
     if (busy) return
@@ -116,7 +116,7 @@ Panel {
   }
   function toggleLast() {
     if (streaming || connecting || credentialTarget) { disconnect(); return }
-    if (lastReceiver) connectReceiver(lastReceiver)
+    if (lastReceiver) connectReceiver(lastReceiver, "")
     else errorText = "Choose a receiver first"
   }
   function saveExtraArgs() { run(actionProc, ["save-extra-args", extraArgs]) }
@@ -347,7 +347,7 @@ Panel {
       hoverEnabled: true
       cursorShape: unavailable ? Qt.ArrowCursor : Qt.PointingHandCursor
       onContainsMouseChanged: receiverRow.hovered = containsMouse
-      onClicked: if (!unavailable && receiver) root.connectReceiver(receiver.ip)
+      onClicked: if (!unavailable && receiver) root.connectReceiver(receiver.ip, receiver.name)
     }
 
     Item {
