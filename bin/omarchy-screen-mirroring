@@ -190,7 +190,9 @@ cleanup_finished_stream() {
   stream_running && return 0
   local ip=""
   [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
-  [[ -z "$ip" ]] || close_ports_after_connection "$ip"
+  # A dismissed Polkit dialog must not prevent the UI from learning that the
+  # stream has ended. The tagged rule remains available for a later retry.
+  [[ -z "$ip" ]] || close_ports_after_connection "$ip" || true
   rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
 }
 
@@ -243,7 +245,7 @@ disconnect_privileged() {
     for _ in {1..50}; do stream_running || break; sleep 0.1; done
     stream_running && kill -KILL "$(<"$STREAM_PID_FILE")" 2>/dev/null || true
   fi
-  [[ -z "$ip" ]] || close_ports_after_connection "$ip"
+  [[ -z "$ip" ]] || close_ports_after_connection "$ip" || true
   rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
   status
 }
