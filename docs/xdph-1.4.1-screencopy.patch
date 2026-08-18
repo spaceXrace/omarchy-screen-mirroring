@@ -1,0 +1,37 @@
+diff --git a/PKGBUILD b/PKGBUILD
+index 1e10d47..d8a9ed9 100644
+--- a/PKGBUILD
++++ b/PKGBUILD
+@@ -3,7 +3,7 @@
+ pkgname=xdg-desktop-portal-hyprland
+ pkgver=1.4.1
+ _protocolver=4d29e48433270a2af06b8bc711ca1fe5109746cd
+-pkgrel=1
++pkgrel=1.1
+ pkgdesc='xdg-desktop-portal backend for hyprland'
+ url="https://github.com/hyprwm/$pkgname"
+ arch=(x86_64)
+@@ -31,12 +31,20 @@ optdepends=('grim: required for the screenshot portal to function'
+             'slurp: support for interactive mode for the screenshot portal')
+ _archive="$pkgname-$pkgver"
+ source=("$url/archive/v$pkgver/$_archive.tar.gz"
+-        "https://github.com/hyprwm/hyprland-protocols/archive/$_protocolver.tar.gz")
++        "https://github.com/hyprwm/hyprland-protocols/archive/$_protocolver.tar.gz"
++        "screencopy-out-of-buffers.patch::$url/commit/688feb3d88404598f12440a668136e74044391de.patch"
++        "screencopy-renegotiation.patch::$url/commit/59d429bf45aed4e2209043c0c36565ad8e2859a5.patch")
+ sha256sums=('3652c14f63a9666acea2c841e196782dbc0f74ea5b4783622dd04a32f08b709f'
+-            '5f6be4d870e94314f05ec7ff9c9c1f028748230ff80a7f89aeaf66c08e5c70e0')
++            '5f6be4d870e94314f05ec7ff9c9c1f028748230ff80a7f89aeaf66c08e5c70e0'
++            '0d4e724cfc3047ffc362a0b85448e15d51125a5a5ee619bd1371e19ba21580fc'
++            '140c4b792f50b8bcd63a3fde62ef3b1596de964bdeb0b29385124c211d540510')
+ 
+ prepare() {
+-	cd "$_archive/subprojects"
++	cd "$_archive"
++	patch -Np1 -i "$srcdir/screencopy-out-of-buffers.patch"
++	patch -Np1 -i "$srcdir/screencopy-renegotiation.patch"
++
++	cd subprojects
+ 	rm -rf hyprland-protocols sdbus-cpp
+ 	ln -sfT "$srcdir/hyprland-protocols-$_protocolver" hyprland-protocols
+ }

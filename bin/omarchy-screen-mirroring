@@ -11,6 +11,7 @@ PERMANENT_IPS_FILE="$CONFIG_DIR/permanent-ips"
 SOCKET="$STATE_DIR/doubletake.sock"
 PID_FILE="$STATE_DIR/doubletake.pid"
 STREAM_PID_FILE="$STATE_DIR/stream.pid"
+STREAM_PGID_FILE="$STATE_DIR/stream.pgid"
 STREAM_IP_FILE="$STATE_DIR/stream.ip"
 STREAM_INPUT_FILE="$STATE_DIR/stream.input"
 STREAM_LOG_MARK_FILE="$STATE_DIR/stream.log-offset"
@@ -118,7 +119,7 @@ vaapi = bool(shutil.which("vainfo") and shutil.which("gst-inspect-1.0"))
 if vaapi:
     vaapi = subprocess.run(["gst-inspect-1.0", "vah264enc"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
-missing = missing_packages + missing_commands + missing_elements
+missing = list(dict.fromkeys(missing_packages + missing_commands + missing_elements))
 print(json.dumps({
     "ok": True,
     "installed": not missing,
@@ -139,6 +140,19 @@ daemon_running() {
 
 stream_running() {
   [[ -f "$STREAM_PID_FILE" ]] && kill -0 "$(<"$STREAM_PID_FILE")" 2>/dev/null
+}
+
+stream_group_running() {
+  [[ -f "$STREAM_PGID_FILE" ]] && kill -0 -- "-$(<"$STREAM_PGID_FILE")" 2>/dev/null
+}
+
+terminate_stream_processes() {
+  local signal=${1:-TERM}
+  if stream_group_running; then
+    kill -"$signal" -- "-$(<"$STREAM_PGID_FILE")" 2>/dev/null || true
+  elif stream_running; then
+    kill -"$signal" "$(<"$STREAM_PID_FILE")" 2>/dev/null || true
+  fi
 }
 
 ensure_daemon() {
@@ -249,10 +263,13 @@ attempt_port_cleanup() {
 cleanup_finished_stream() {
   [[ -f "$STREAM_PID_FILE" ]] || return 0
   stream_running && return 0
+  terminate_stream_processes
+  for _ in {1..20}; do stream_group_running || break; sleep 0.05; done
+  stream_group_running && terminate_stream_processes KILL
   local ip=""
   [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
   [[ -z "$ip" ]] || queue_port_cleanup "$ip"
-  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
   attempt_port_cleanup || true
 }
 
@@ -323,13 +340,13 @@ PY
 disconnect_stream() {
   local ip=""
   [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
-  if stream_running; then
-    kill "$(<"$STREAM_PID_FILE")" 2>/dev/null || true
-    for _ in {1..50}; do stream_running || break; sleep 0.1; done
-    stream_running && kill -KILL "$(<"$STREAM_PID_FILE")" 2>/dev/null || true
+  if stream_running || stream_group_running; then
+    terminate_stream_processes
+    for _ in {1..50}; do stream_group_running || stream_running || break; sleep 0.1; done
+    if stream_running || stream_group_running; then terminate_stream_processes KILL; fi
   fi
   [[ -z "$ip" ]] || queue_port_cleanup "$ip"
-  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
   attempt_port_cleanup || true
   status
 }
@@ -367,7 +384,7 @@ print(json.dumps({"ok": True, "state": state, "streams": [stream], "lastReceiver
 PY
     return
   fi
-  rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
   if daemon_running; then
     local response
     response="$(ctl status)"
@@ -422,14 +439,16 @@ case "${1:-}" in
     mkfifo "$STREAM_INPUT_FILE"
     stat -c %s "$LOG_FILE" 2>/dev/null > "$STREAM_LOG_MARK_FILE" || printf 0 > "$STREAM_LOG_MARK_FILE"
     exec {stream_input_fd}<>"$STREAM_INPUT_FILE"
-    "${args[@]}" <"$STREAM_INPUT_FILE" >>"$LOG_FILE" 2>&1 &
+    setsid "${args[@]}" <"$STREAM_INPUT_FILE" >>"$LOG_FILE" 2>&1 &
     exec {stream_input_fd}>&-
     printf '%s\n' "$!" > "$STREAM_PID_FILE"
+    printf '%s\n' "$!" > "$STREAM_PGID_FILE"
     printf '%s\n' "$ip" > "$STREAM_IP_FILE"
     sleep 0.2
     if ! stream_running; then
       close_ports_after_connection "$ip"
-      rm -f "$STREAM_PID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+      terminate_stream_processes
+      rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
       json_error "doubletake exited before screen capture started"
     fi
     status

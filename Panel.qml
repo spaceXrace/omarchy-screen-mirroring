@@ -79,7 +79,7 @@ Panel {
     cleanupRequired = data.cleanupRequired === true
     errorText = data.error || (cleanupRequired ? "Temporary firewall rules remain after the stream stopped." : "")
     lastReceiver = data.lastReceiver || lastReceiver
-    extraArgs = data.extraArgs !== undefined ? data.extraArgs : extraArgs
+    if (!argsInput.activeFocus && !actionProc.running && data.extraArgs !== undefined) extraArgs = data.extraArgs
     permanentPorts = data.permanentPorts === true
     var streams = data.streams || []
     streaming = false
@@ -279,7 +279,7 @@ Panel {
               Layout.fillWidth: true
               spacing: Style.space(2)
               Text { Layout.fillWidth: true; text: "Screen Mirroring"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true; elide: Text.ElideRight }
-              Text { Layout.fillWidth: true; text: root.scanning ? "SCANNING FOR RECEIVERS" : (root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : (root.connecting ? "CONNECTING TO " + root.connectedReceiver.toUpperCase() : "NOT CONNECTED"))); color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+              Text { Layout.fillWidth: true; text: root.scanning ? "SCANNING FOR RECEIVERS" : (root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : (root.connecting ? "CONNECTING TO " + root.connectedReceiver.toUpperCase() : (root.devices.length === 0 ? "NO RECEIVERS FOUND" : "NOT CONNECTED")))); color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
             }
             Button {
               iconText: "󰑐"
@@ -336,7 +336,6 @@ Panel {
             spacing: Style.space(8)
             PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
             PanelSectionHeader { text: "RECEIVERS"; foreground: root.foreground; fontFamily: root.fontFamily }
-            Text { visible: root.devices.length === 0; Layout.fillWidth: true; text: "No receivers found. Click Reload to search this network."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             ListView {
               id: receiverList
               Layout.fillWidth: true
