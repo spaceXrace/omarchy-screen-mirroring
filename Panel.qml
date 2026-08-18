@@ -33,6 +33,7 @@ Panel {
   property bool heroHover: false
   property bool permanentPorts: false
   property bool cleanupRequired: false
+  property string missingDependencies: ""
   property bool cursorActive: false
   property string focusSection: "header"
   property int headerIndex: 0
@@ -115,26 +116,27 @@ Panel {
     if (receiverIndex >= devices.length) receiverIndex = Math.max(0, devices.length - 1)
   }
   function installDependencies() {
-    Quickshell.execDetached(["alacritty", "-e", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils; omarchy pkg aur add doubletake; read -rp 'Press enter to close...'"])
+    Quickshell.execDetached(["xdg-terminal-exec", "--hold", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec ufw polkit python && omarchy pkg aur add doubletake"])
   }
   function connectReceiver(ip, name) {
     if (!ip || busy) return
     busy = true
     run(actionProc, ["connect", ip, name || ""])
   }
+  function receiverNameForIp(ip) {
+    for (var i = 0; i < devices.length; i++) {
+      if (devices[i] && devices[i].ip === ip) return devices[i].name || ""
+    }
+    return ""
+  }
   function disconnect() {
     if (actionProc.running) return
     busy = true
     run(actionProc, ["disconnect"])
   }
-  function toggleLast() {
-    if (streaming || connecting || credentialTarget) { disconnect(); return }
-    if (lastReceiver) connectReceiver(lastReceiver, "")
-    else errorText = "Choose a receiver first"
-  }
   function toggleStream() {
     if (streamActive) disconnect()
-    else if (lastReceiver) connectReceiver(lastReceiver, "")
+    else if (lastReceiver) connectReceiver(lastReceiver, receiverNameForIp(lastReceiver))
     else errorText = "Choose a receiver first"
   }
   function saveExtraArgs() { run(actionProc, ["save-extra-args", extraArgs]) }
@@ -202,6 +204,7 @@ Panel {
       var data = Model.parseJson(depsOut.text, {})
       root.depsInstalled = data.installed === true
       root.vaapiAvailable = data.vaapi === true
+      root.missingDependencies = (data.missing || []).join(", ")
       if (root.opened && root.depsInstalled) root.reloadReceivers()
       if (!root.depsInstalled) root.scanning = false
     }
@@ -323,6 +326,7 @@ Panel {
             PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
             PanelSectionHeader { text: "DEPENDENCIES"; foreground: root.foreground; fontFamily: root.fontFamily }
             Text { Layout.fillWidth: true; text: "Install doubletake plus GStreamer and VA-API support. The installer uses Omarchy's package commands."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
+            Text { visible: root.missingDependencies !== ""; Layout.fillWidth: true; text: "Missing: " + root.missingDependencies; color: root.urgent; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             Button { Layout.fillWidth: true; text: "Install dependencies"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.installDependencies() }
           }
 

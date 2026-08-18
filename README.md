@@ -1,15 +1,57 @@
 # Screen Mirroring
 
-An Omarchy Quattro bar widget for mirroring a Linux desktop to compatible AirPlay receivers with [doubletake](https://github.com/omarroth/doubletake).
+An Omarchy Quattro bar widget for mirroring a Linux desktop to compatible receivers with [doubletake](https://github.com/omarroth/doubletake).
 
 ## Features
 
-- Screen mirroring icon in the right status-bar category.
-- Receiver discovery starts when the panel opens and when **Reload** is clicked.
-- One-click reconnect to the last receiver, plus an on/off control in the panel header.
-- PIN and configured-password prompts for protected receivers.
-- Saved extra doubletake arguments, such as `-hwaccel vaapi`.
-- Receiver-specific, temporary UFW UDP and TCP rules for `60000:60010` while a stream is active.
+- Discovers compatible receivers when the panel opens or **Reload** is selected.
+- Mirrors a Wayland screen or window selected through the desktop portal.
+- Shows connecting, credential, streaming, failure, and firewall-cleanup states.
+- Reconnects to the last receiver from the hero icon or on/off switch.
+- Supports one-time pairing PINs and configured receiver passwords.
+- Remembers additional doubletake arguments, such as `-hwaccel vaapi`.
+- Opens tagged, receiver-specific UFW rules for TCP and UDP ports `60000:60010`.
+- Can retain rules per receiver to avoid repeated Polkit authentication.
+- Cleans up temporary rules after disconnects, failures, and unexpected exits.
+- Supports mouse and keyboard operation.
+
+## Requirements
+
+- Omarchy Quattro with the Omarchy shell.
+- A receiver supported by doubletake.
+- A working PipeWire screen-cast portal.
+- UFW and a desktop Polkit authentication agent.
+
+The widget checks all runtime dependencies before enabling receiver controls.
+
+### Official Packages
+
+```text
+gstreamer
+gst-plugins-base
+gst-plugins-good
+gst-plugins-bad
+gst-plugins-ugly
+gst-libav
+gst-plugin-va
+libva-utils
+libpulse
+pipewire
+xdg-desktop-portal
+xdg-desktop-portal-hyprland
+xdg-terminal-exec
+ufw
+polkit
+python
+```
+
+### AUR Package
+
+```text
+doubletake
+```
+
+The dependency check also verifies `doubletake`, `doubletake-ctl`, `pactl`, `pipewire`, `pkexec`, `ufw`, `vainfo`, `xdg-terminal-exec`, and the required `pipewiresrc` and `h264parse` GStreamer elements. VA-API availability is reported separately by checking `vah264enc`.
 
 ## Install
 
@@ -17,36 +59,99 @@ An Omarchy Quattro bar widget for mirroring a Linux desktop to compatible AirPla
 omarchy plugin add https://github.com/spaceXrace/omarchy-screen-mirroring --enable --yes
 ```
 
-Open the widget and select **Install dependencies**. It installs the AUR `doubletake` package and the GStreamer/VA-API packages through `omarchy pkg`.
+Open the widget and select **Install dependencies** if anything is missing. The installer uses Omarchy's package commands:
 
-## Use
+```sh
+omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
+  gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire \
+  xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec \
+  ufw polkit python
+omarchy pkg aur add doubletake
+```
 
-1. Open the status-bar widget and click **Reload** to discover receivers.
-2. Select a receiver. A graphical Polkit prompt authorizes a UFW rule restricted to that receiver IP, then starts mirroring.
-3. Enter a pairing PIN or receiver password when prompted.
-4. Use **Off** to end mirroring. The helper removes its tagged UFW rules after disconnecting.
+## Usage
 
-The header's on/off control reconnects to the last receiver when idle. The bar icon only opens and closes the panel.
+1. Open the Screen Mirroring widget. It scans for receivers for approximately five seconds.
+2. Select a receiver.
+3. Approve the receiver-specific firewall rules through the Polkit dialog when requested.
+4. Select a screen or window in the desktop portal.
+5. Enter a PIN or configured receiver password in the panel if doubletake requests one.
+6. Use the hero icon or switch to stop mirroring.
 
-## Arguments
+The hero displays the receiver name while connecting and streaming. When idle, its icon and switch reconnect to the last receiver.
 
-Arguments are passed to doubletake when its daemon starts. For example, use `-hwaccel vaapi` for VA-API encoding. The widget reserves `-daemonize`, `-socket`, and `-port-range`; those cannot be overridden.
+## Keyboard Controls
 
-## Notes
+- Arrow keys or `h`, `j`, `k`, `l`: move between header actions, receiver rows, and Settings.
+- `Enter` or `Space`: activate the focused action or receiver.
+- `r`: reload receivers.
+- `w`: start or stop mirroring.
+- `Escape`: close the panel.
 
-- The helper starts doubletake only while the panel is in use or a stream is active. A running stream keeps its daemon alive.
-- Doubletake's daemon performs its own mDNS discovery while it is running. The widget does not issue discovery requests while the panel is closed.
-- UFW operations use the desktop Polkit prompt rather than opening a terminal. No broad firewall rule is added: each rule is limited to the selected receiver IP and is marked with the plugin ID for safe cleanup.
-- **Keep receiver ports open** retains each receiver-specific rule after its first authorization, avoiding later password prompts for that receiver. Turning it off removes all rules retained by this plugin.
-- Screen capture source selection is handled by doubletake.
+Credential and argument text fields receive normal keyboard input while focused. Pressing Enter submits a PIN or password.
+
+## Credentials
+
+Doubletake supports both credential modes exposed by the widget:
+
+- **Pairing PIN:** a temporary code displayed by the receiver.
+- **Configured password:** the static password configured in the receiver's screen-mirroring settings.
+
+Credentials are passed to the running doubletake process through a private FIFO rather than command-line arguments. Doubletake stores successful pairing credentials in its own credential store, normally `~/.config/doubletake/credentials.json`.
+
+## Firewall
+
+Doubletake reserves local ports `60000-60010`. The widget adds TCP and UDP UFW rules restricted to the selected receiver IP. Rules are tagged with `spacexrace.screen-mirroring-<IP>` so cleanup removes only rules owned by this plugin.
+
+By default, rules are removed after disconnect, failed setup, or an unexpected stream exit. If Polkit authentication is dismissed or cleanup fails, the panel displays **Remove leftover firewall rules**.
+
+Enable **Keep receiver ports open** in Settings to retain the receiver-specific rules after the first approval. Turning it off removes all retained plugin-owned rules.
+
+## Settings
+
+- **Doubletake arguments:** extra CLI arguments saved under the plugin's Omarchy configuration. The plugin reserves `-daemonize`, `-socket`, and `-port-range` because it manages those values.
+- **Keep receiver ports open:** retains receiver-specific UFW rules to avoid future firewall password prompts.
+- **VA-API status:** reports whether the GStreamer `vah264enc` element is available.
+
+Plugin settings are stored in `~/.config/omarchy/screen-mirroring/`. Runtime files use `$XDG_RUNTIME_DIR/omarchy-screen-mirroring/`. Doubletake logs are written to `~/.cache/omarchy-screen-mirroring/doubletake.log`.
+
+## Troubleshooting
+
+### Frozen Video After Startup
+
+If the image freezes after a few frames and the portal journal reports `Out of buffers`, restart the user portal services and reconnect:
+
+```sh
+systemctl --user restart xdg-desktop-portal-hyprland.service xdg-desktop-portal.service
+```
+
+### Receiver Compatibility
+
+Receiver support is provided by doubletake. Some third-party implementations require upstream protocol fixes. For example, LG webOS PTP support is currently tracked in [doubletake PR #31](https://github.com/omarroth/doubletake/pull/31).
+
+### Logs
+
+```sh
+tail -f ~/.cache/omarchy-screen-mirroring/doubletake.log
+journalctl --user -u xdg-desktop-portal-hyprland.service -f
+```
+
+## Remove
+
+Stop any active stream before removing the plugin. If permanent ports were enabled, turn that setting off first so the plugin removes its retained rules.
+
+```sh
+omarchy plugin remove spacexrace.screen-mirroring --yes
+```
 
 ## Development
 
 ```sh
 omarchy plugin validate .
 qmllint -I "$OMARCHY_PATH/shell" BarWidget.qml Panel.qml
+bash -n bin/omarchy-screen-mirroring
 ```
 
 ## License
 
-MIT. Doubletake is a separate LGPL-3.0-or-later dependency.
+This plugin is MIT licensed. Doubletake is a separate LGPL-3.0-or-later dependency. AirPlay and Apple are trademarks of Apple Inc.; this project is not affiliated with or endorsed by Apple.

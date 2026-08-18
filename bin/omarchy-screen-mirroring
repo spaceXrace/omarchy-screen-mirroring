@@ -83,12 +83,53 @@ PY
 deps() {
   python <<'PY'
 import json, shutil, subprocess
-packages = ["doubletake", "gstreamer", "gst-plugins-base", "gst-plugins-good", "gst-plugins-bad", "gst-plugins-ugly", "gst-libav", "gst-plugin-va", "libva-utils"]
-missing = [name for name in ("doubletake", "doubletake-ctl", "gst-inspect-1.0", "vainfo") if not shutil.which(name)]
-vaapi = False
-if not missing:
+
+official = [
+    "gstreamer", "gst-plugins-base", "gst-plugins-good", "gst-plugins-bad",
+    "gst-plugins-ugly", "gst-libav", "gst-plugin-va", "libva-utils",
+    "libpulse", "pipewire", "xdg-desktop-portal",
+    "xdg-desktop-portal-hyprland", "xdg-terminal-exec", "ufw", "polkit", "python",
+]
+aur = ["doubletake"]
+commands = [
+    "doubletake", "doubletake-ctl", "gst-inspect-1.0", "pactl", "pipewire",
+    "python", "ufw", "pkexec", "vainfo", "xdg-terminal-exec",
+]
+
+missing_packages = []
+if shutil.which("pacman"):
+    for package in official + aur:
+        result = subprocess.run(["pacman", "-Q", package], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode != 0:
+            missing_packages.append(package)
+missing_commands = [command for command in commands if not shutil.which(command)]
+
+gst_elements = ["pipewiresrc", "h264parse"]
+missing_elements = []
+if shutil.which("gst-inspect-1.0"):
+    for element in gst_elements:
+        result = subprocess.run(["gst-inspect-1.0", element], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode != 0:
+            missing_elements.append(element)
+else:
+    missing_elements = gst_elements
+
+vaapi = bool(shutil.which("vainfo") and shutil.which("gst-inspect-1.0"))
+if vaapi:
     vaapi = subprocess.run(["gst-inspect-1.0", "vah264enc"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-print(json.dumps({"ok": True, "installed": not missing, "missing": missing, "vaapi": vaapi, "packages": packages}))
+
+missing = missing_packages + missing_commands + missing_elements
+print(json.dumps({
+    "ok": True,
+    "installed": not missing,
+    "missing": missing,
+    "missingPackages": missing_packages,
+    "missingCommands": missing_commands,
+    "missingGstreamerElements": missing_elements,
+    "vaapi": vaapi,
+    "officialPackages": official,
+    "aurPackages": aur,
+}))
 PY
 }
 
@@ -263,7 +304,23 @@ PY
   printf '%s\n' "$response"
 }
 
-disconnect_privileged() {
+device_name_for_ip() {
+  local ip=$1 response
+  daemon_running || return 0
+  response="$(doubletake-ctl -socket "$SOCKET" devices 2>/dev/null || true)"
+  python - "$response" "$ip" <<'PY'
+import json, sys
+try:
+    for device in json.loads(sys.argv[1]).get("devices", []):
+        if device.get("ip") == sys.argv[2]:
+            print(device.get("name", ""))
+            break
+except Exception:
+    pass
+PY
+}
+
+disconnect_stream() {
   local ip=""
   [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
   if stream_running; then
@@ -341,11 +398,15 @@ case "${1:-}" in
   discover)
     discover
     ;;
-  connect|connect-privileged)
+  connect)
     ip=${2:-}
     name=${3:-}
     [[ -n "$ip" ]] || json_error "Receiver IP is required"
     stream_running && json_error "A screen mirroring stream is already active"
+    if [[ -z "$name" && "$(settings_value lastReceiver)" == "$ip" ]]; then
+      name="$(settings_value lastReceiverName)"
+    fi
+    if [[ -z "$name" ]]; then name="$(device_name_for_ip "$ip")"; fi
     shutdown_if_idle
     open_ports_for_connection "$ip"
     save_settings lastReceiver "$ip"
@@ -382,8 +443,7 @@ case "${1:-}" in
     : > "$STREAM_CREDENTIAL_SUBMITTED_FILE"
     status
     ;;
-  disconnect-privileged) disconnect_privileged ;;
-  disconnect) disconnect_privileged ;;
+  disconnect) disconnect_stream ;;
   close-ports)
     attempt_port_cleanup || true
     status
