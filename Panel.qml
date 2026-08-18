@@ -33,6 +33,10 @@ Panel {
   property bool heroHover: false
   property bool permanentPorts: false
   property bool cleanupRequired: false
+  property bool cursorActive: false
+  property string focusSection: "header"
+  property int headerIndex: 0
+  property int receiverIndex: 0
 
   readonly property string helper: Quickshell.env("HOME") + "/.config/omarchy/plugins/spacexrace.screen-mirroring/bin/omarchy-screen-mirroring"
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -108,6 +112,7 @@ Panel {
     var data = Model.parseJson(raw, { ok: false, error: "Invalid receiver list" })
     if (!data.ok) { errorText = data.error || "Unable to find receivers"; return }
     devices = data.devices || []
+    if (receiverIndex >= devices.length) receiverIndex = Math.max(0, devices.length - 1)
   }
   function installDependencies() {
     Quickshell.execDetached(["alacritty", "-e", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils; omarchy pkg aur add doubletake; read -rp 'Press enter to close...'"])
@@ -139,6 +144,35 @@ Panel {
     if (!credentialTarget || credentialInput.text.length === 0) return
     run(actionProc, ["credential", credentialTarget, credentialInput.text])
     credentialInput.text = ""
+  }
+  function moveCursor(dx, dy) {
+    cursorActive = true
+    if (dy !== 0) {
+      if (focusSection === "header" && dy > 0) {
+        focusSection = devices.length > 0 ? "receivers" : "settings"
+      } else if (focusSection === "receivers") {
+        if (dy < 0 && receiverIndex <= 0) focusSection = "header"
+        else if (dy > 0 && receiverIndex >= devices.length - 1) focusSection = "settings"
+        else receiverIndex = Math.max(0, Math.min(devices.length - 1, receiverIndex + dy))
+      } else if (focusSection === "settings" && dy < 0) {
+        focusSection = devices.length > 0 ? "receivers" : "header"
+      }
+    }
+    if (dx !== 0 && focusSection === "header") headerIndex = Math.max(0, Math.min(1, headerIndex + dx))
+    if (focusSection === "receivers") receiverList.positionViewAtIndex(receiverIndex, ListView.Contain)
+  }
+  function activateCursor() {
+    cursorActive = true
+    if (focusSection === "header") {
+      if (headerIndex === 0) reloadReceivers()
+      else toggleStream()
+    } else if (focusSection === "receivers") {
+      var receiver = devices[receiverIndex]
+      if (streamActive) disconnect()
+      else if (receiver) connectReceiver(receiver.ip, receiver.name)
+    } else if (focusSection === "settings") {
+      showSettings = !showSettings
+    }
   }
 
   onOpenedChanged: if (opened) refreshPanel()
@@ -208,8 +242,15 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: credentialInput.activeFocus || argsInput.activeFocus
+      onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
+      onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onTextKey: function(text) {
+        if (text === "r" || text === "R") root.reloadReceivers()
+        else if (text === "w" || text === "W") root.toggleStream()
+      }
 
       Flickable {
         anchors.fill: parent
@@ -245,6 +286,8 @@ Panel {
               iconSize: Style.font.subtitle * 1.5
               horizontalPadding: Style.space(5)
               verticalPadding: Style.space(2)
+              hasCursor: root.cursorActive && root.focusSection === "header" && root.headerIndex === 0
+              onHovered: function(on) { if (on) { root.cursorActive = false; root.focusSection = "header"; root.headerIndex = 0 } }
               onClicked: root.reloadReceivers()
             }
             Item {
@@ -255,6 +298,8 @@ Panel {
                 anchors.fill: parent
                 checked: root.streamActive
                 interactive: false
+                cursorRing: true
+                hasCursor: switchMouse.containsMouse || (root.cursorActive && root.focusSection === "header" && root.headerIndex === 1)
                 foreground: root.foreground
               }
               MouseArea {
@@ -262,6 +307,7 @@ Panel {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
+                onContainsMouseChanged: if (containsMouse) { root.cursorActive = false; root.focusSection = "header"; root.headerIndex = 1 }
                 onClicked: root.toggleStream()
               }
               PanelToolTip { visible: switchMouse.containsMouse; text: root.streamActive ? "Stop mirroring" : "Mirror to last receiver"; fontFamily: root.fontFamily }
@@ -288,6 +334,7 @@ Panel {
             PanelSectionHeader { text: "RECEIVERS"; foreground: root.foreground; fontFamily: root.fontFamily }
             Text { visible: root.devices.length === 0; Layout.fillWidth: true; text: "No receivers found. Click Reload to search this network."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             ListView {
+              id: receiverList
               Layout.fillWidth: true
               Layout.preferredHeight: Math.min(contentHeight, Style.space(260))
               visible: root.devices.length > 0
@@ -309,10 +356,10 @@ Panel {
               spacing: Style.space(6)
               PanelSectionHeader { text: root.credentialKind === "password" ? "RECEIVER PASSWORD" : "PAIRING PIN"; foreground: root.foreground; fontFamily: root.fontFamily }
               Text { Layout.fillWidth: true; text: root.credentialKind === "password" ? "Enter the password configured on the receiver." : "Enter the PIN shown on the receiver."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
-              TextField { id: credentialInput; Layout.fillWidth: true; placeholderText: root.credentialKind === "password" ? "Password" : "Four-digit PIN"; password: root.credentialKind === "password"; inputMethodHints: root.credentialKind === "password" ? Qt.ImhHiddenText : Qt.ImhDigitsOnly }
+              TextField { id: credentialInput; Layout.fillWidth: true; placeholderText: root.credentialKind === "password" ? "Password" : "Four-digit PIN"; password: root.credentialKind === "password"; inputMethodHints: root.credentialKind === "password" ? Qt.ImhHiddenText : Qt.ImhDigitsOnly; onAccepted: root.submitCredential() }
               Button { Layout.fillWidth: true; text: "Continue"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.submitCredential() }
             }
-            Button { Layout.fillWidth: true; text: "Settings"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.showSettings = true }
+            Button { Layout.fillWidth: true; text: "Settings"; bordered: true; hasCursor: root.cursorActive && root.focusSection === "settings"; foreground: root.foreground; fontFamily: root.fontFamily; onHovered: function(on) { if (on) { root.cursorActive = false; root.focusSection = "settings" } }; onClicked: root.showSettings = true }
             Button { visible: root.cleanupRequired; Layout.fillWidth: true; text: "Remove leftover firewall rules"; bordered: true; foreground: root.urgent; fontFamily: root.fontFamily; onClicked: root.closeLeftoverPorts() }
           }
 
@@ -328,6 +375,7 @@ Panel {
             }
             PanelSectionHeader { text: "DOUBLETAKE ARGUMENTS"; foreground: root.foreground; fontFamily: root.fontFamily }
             TextField {
+              id: argsInput
               Layout.fillWidth: true
               placeholderText: "For example: -hwaccel vaapi"
               text: root.extraArgs
@@ -375,7 +423,7 @@ Panel {
     implicitHeight: rowBody.implicitHeight + Style.space(12)
     foreground: root.foreground
     current: active
-    hasCursor: !!(hovered || (root.receiverCursorActive && root.receiverIndex === listIndex))
+    hasCursor: hovered || (root.cursorActive && root.focusSection === "receivers" && root.receiverIndex === listIndex)
 
     BorderSurface {
       anchors.fill: parent
@@ -391,6 +439,11 @@ Panel {
       cursorShape: unavailable ? Qt.ArrowCursor : Qt.PointingHandCursor
       onContainsMouseChanged: {
         receiverRow.hovered = containsMouse
+        if (containsMouse) {
+          root.cursorActive = false
+          root.focusSection = "receivers"
+          root.receiverIndex = listIndex
+        }
       }
       onClicked: if (!unavailable && receiver) root.connectReceiver(receiver.ip, receiver.name)
     }

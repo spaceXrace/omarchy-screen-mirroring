@@ -230,10 +230,10 @@ try:
 except Exception:
     text = ""
 submitted = sys.argv[3] == "true"
-if not submitted and "enter the pin shown" in text:
-    print("pin_required pin")
-elif not submitted and ("enter the receiver's configured password" in text or "configured password or pairing pin" in text):
-    print("pin_required password")
+pin_at = text.rfind("enter the pin shown")
+password_at = max(text.rfind("enter the receiver's configured password"), text.rfind("configured password or pairing pin"))
+if not submitted and max(pin_at, password_at) >= 0:
+    print("pin_required password" if password_at > pin_at else "pin_required pin")
 elif "screen capture started" in text:
     print("streaming")
 else:
