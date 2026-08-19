@@ -103,7 +103,7 @@ Credentials are passed to the running doubletake process through a private FIFO 
 
 ## Firewall
 
-Doubletake reserves local ports `60000-60010`. The widget adds TCP and UDP UFW rules restricted to the selected receiver IP. Rules are tagged with `spacexrace.screen-mirroring-<IP>` so cleanup removes only rules owned by this plugin.
+Doubletake reserves local ports `60000-60010`. The widget validates the receiver IP and asks Polkit to run the system-owned `/usr/bin/ufw` executable with fixed TCP and UDP rules restricted to that address. Rules are tagged with `spacexrace.screen-mirroring-<IP>` so cleanup removes only rules owned by this plugin.
 
 By default, rules are removed after disconnect, failed setup, or an unexpected stream exit. If Polkit authentication is dismissed or cleanup fails, the panel displays **Remove leftover firewall rules**.
 
@@ -118,36 +118,6 @@ Enable **Keep receiver ports open** in Settings to retain the receiver-specific 
 Plugin settings are stored in `~/.config/omarchy/screen-mirroring/`. Runtime files use `$XDG_RUNTIME_DIR/omarchy-screen-mirroring/`. Doubletake logs are written to `~/.cache/omarchy-screen-mirroring/doubletake.log`.
 
 ## Troubleshooting
-
-### Frozen Video After Startup
-
-`xdg-desktop-portal-hyprland` 1.4.0 and 1.4.1 can permanently freeze a screencast after temporary PipeWire backpressure or format renegotiation. The portal process and doubletake remain active, while the journal repeatedly reports `Out of buffers` and `tried scheduling on already scheduled cb`. Switching windows or applications can expose the race.
-
-The defects were fixed upstream by [PR #424](https://github.com/hyprwm/xdg-desktop-portal-hyprland/pull/424) and [PR #425](https://github.com/hyprwm/xdg-desktop-portal-hyprland/pull/425), after the 1.4.1 release. First check whether Arch now provides a newer version:
-
-```sh
-pacman -Si xdg-desktop-portal-hyprland | grep Version
-```
-
-Install the normal Arch update if it is newer than 1.4.1. While Arch still provides `1.4.1-1`, the included packaging patch rebuilds the official package with only those two upstream fixes. Run these commands from the plugin repository:
-
-```sh
-builddir=$(mktemp -d)
-git clone https://gitlab.archlinux.org/archlinux/packaging/packages/xdg-desktop-portal-hyprland.git "$builddir/xdph"
-git -C "$builddir/xdph" apply "$PWD/docs/xdph-1.4.1-screencopy.patch"
-sudo pacman -S --needed base-devel hyprland-protocols
-(cd "$builddir/xdph" && makepkg --cleanbuild --clean)
-sudo pacman -U "$builddir"/xdph/xdg-desktop-portal-hyprland-1.4.1-1.1-x86_64.pkg.tar.zst
-systemctl --user restart xdg-desktop-portal-hyprland.service xdg-desktop-portal.service
-```
-
-Release `1.1` sorts above Arch's affected release `1` but below a future official release `2`, so the normal package manager can replace this local build. Avoid `xdg-desktop-portal-hyprland-git` for this workaround because its AUR recipe also replaces stable Hyprland libraries with git variants.
-
-Restarting the portal services can temporarily recover an already-frozen session, but does not fix the underlying 1.4.1 race:
-
-```sh
-systemctl --user restart xdg-desktop-portal-hyprland.service xdg-desktop-portal.service
-```
 
 ### Receiver Compatibility
 

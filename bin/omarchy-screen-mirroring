@@ -19,6 +19,8 @@ STREAM_CREDENTIAL_SUBMITTED_FILE="$STATE_DIR/stream.credential-submitted"
 CLEANUP_IP_FILE="$STATE_DIR/cleanup.ip"
 CLEANUP_IN_PROGRESS_FILE="$STATE_DIR/cleanup.in-progress"
 LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-screen-mirroring/doubletake.log"
+PKEXEC=/usr/bin/pkexec
+UFW=/usr/bin/ufw
 
 json_error() {
   python - "$1" <<'PY'
@@ -188,32 +190,29 @@ firewall_comment() {
   printf '%s-%s' "$PLUGIN_ID" "$1"
 }
 
+validate_ip() {
+  python - "$1" <<'PY'
+import ipaddress, sys
+try:
+    print(ipaddress.ip_address(sys.argv[1]))
+except ValueError:
+    sys.exit(1)
+PY
+}
+
 open_firewall() {
   local ip=$1
-  ufw allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null
-  ufw allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null
+  ip="$(validate_ip "$ip")" || json_error "Receiver IP is invalid"
+  "$PKEXEC" "$UFW" allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null
+  "$PKEXEC" "$UFW" allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null
 }
 
 close_firewall() {
-  local ip=$1 comment number rules
+  local ip=$1 comment
+  ip="$(validate_ip "$ip")" || json_error "Receiver IP is invalid"
   comment="$(firewall_comment "$ip")"
-  while true; do
-    rules="$(ufw status numbered)"
-    number="$(python - "$comment" "$rules" <<'PY'
-import re, sys
-needle = sys.argv[1]
-matches = []
-for line in sys.argv[2].splitlines():
-    if needle in line:
-        match = re.search(r"\[\s*(\d+)\]", line)
-        if match:
-            matches.append(int(match.group(1)))
-print(max(matches) if matches else "")
-PY
-)"
-    [[ -n "$number" ]] || break
-    ufw --force delete "$number" >/dev/null
-  done
+  "$PKEXEC" "$UFW" --force delete allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$comment" >/dev/null
+  "$PKEXEC" "$UFW" --force delete allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$comment" >/dev/null
 }
 
 permanent_ports_enabled() {
@@ -232,14 +231,14 @@ mark_permanent_ip() {
 open_ports_for_connection() {
   local ip=$1
   if permanent_ports_enabled && permanent_ip_exists "$ip"; then return; fi
-  pkexec "$0" firewall-open "$ip"
+  open_firewall "$ip"
   if permanent_ports_enabled; then mark_permanent_ip "$ip"; fi
 }
 
 close_ports_after_connection() {
   local ip=$1
   permanent_ports_enabled && permanent_ip_exists "$ip" && return
-  pkexec "$0" firewall-close "$ip"
+  close_firewall "$ip"
 }
 
 queue_port_cleanup() {
@@ -419,6 +418,7 @@ case "${1:-}" in
     ip=${2:-}
     name=${3:-}
     [[ -n "$ip" ]] || json_error "Receiver IP is required"
+    ip="$(validate_ip "$ip")" || json_error "Receiver IP is invalid"
     stream_running && json_error "A screen mirroring stream is already active"
     if [[ -z "$name" && "$(settings_value lastReceiver)" == "$ip" ]]; then
       name="$(settings_value lastReceiverName)"
@@ -467,14 +467,15 @@ case "${1:-}" in
     attempt_port_cleanup || true
     status
     ;;
-  firewall-open) open_firewall "${2:-}" ;;
-  firewall-close) close_firewall "${2:-}" ;;
   save-permanent-ports)
     enabled=${2:-false}
     [[ "$enabled" == "true" || "$enabled" == "false" ]] || json_error "Invalid permanent ports setting"
     if [[ "$enabled" == "false" && -f "$PERMANENT_IPS_FILE" ]]; then
       while IFS= read -r ip; do
-        [[ -z "$ip" ]] || pkexec "$0" firewall-close "$ip"
+        [[ -z "$ip" ]] || {
+          ip="$(validate_ip "$ip")" || json_error "Stored receiver IP is invalid"
+          close_firewall "$ip"
+        }
       done < "$PERMANENT_IPS_FILE"
       rm -f "$PERMANENT_IPS_FILE"
     fi
