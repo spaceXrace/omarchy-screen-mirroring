@@ -27,6 +27,7 @@ Panel {
   property string errorText: ""
   property string credentialTarget: ""
   property string credentialKind: ""
+  property string pendingCredential: ""
   property var devices: []
   property bool showSettings: false
   property bool scanning: false
@@ -143,8 +144,9 @@ Panel {
   function savePermanentPorts(enabled) { run(actionProc, ["save-permanent-ports", enabled ? "true" : "false"]) }
   function closeLeftoverPorts() { run(actionProc, ["close-ports"]) }
   function submitCredential() {
-    if (!credentialTarget || credentialInput.text.length === 0) return
-    run(actionProc, ["credential", credentialTarget, credentialInput.text])
+    if (!credentialTarget || credentialInput.text.length === 0 || actionProc.running) return
+    pendingCredential = credentialInput.text
+    run(actionProc, ["credential", credentialTarget])
     credentialInput.text = ""
   }
   function moveCursor(dx, dy) {
@@ -224,8 +226,16 @@ Panel {
   }
   Process {
     id: actionProc
+    stdinEnabled: true
     stdout: StdioCollector { id: actionOut }
+    onStarted: {
+      if (root.pendingCredential !== "") {
+        actionProc.write(root.pendingCredential + "\n")
+        root.pendingCredential = ""
+      }
+    }
     onExited: {
+      root.pendingCredential = ""
       root.applyStatus(actionOut.text)
       root.run(statusProc, ["status"])
     }
@@ -325,9 +335,9 @@ Panel {
             spacing: Style.space(8)
             PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
             PanelSectionHeader { text: "DEPENDENCIES"; foreground: root.foreground; fontFamily: root.fontFamily }
-            Text { Layout.fillWidth: true; text: "Install doubletake plus GStreamer and VA-API support. The installer uses Omarchy's package commands."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
+            Text { Layout.fillWidth: true; text: "Install GStreamer and VA-API packages from the official repositories, plus doubletake from the AUR. The installer uses Omarchy's package commands."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             Text { visible: root.missingDependencies !== ""; Layout.fillWidth: true; text: "Missing: " + root.missingDependencies; color: root.urgent; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
-            Button { Layout.fillWidth: true; text: "Install dependencies"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.installDependencies() }
+            Button { Layout.fillWidth: true; text: "Install dependencies (includes AUR)"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.installDependencies() }
           }
 
           ColumnLayout {

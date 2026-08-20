@@ -99,7 +99,7 @@ Doubletake supports both credential modes exposed by the widget:
 - **Pairing PIN:** a temporary code displayed by the receiver.
 - **Configured password:** the static password configured in the receiver's screen-mirroring settings.
 
-Credentials are passed to the running doubletake process through a private FIFO rather than command-line arguments. Doubletake stores successful pairing credentials in its own credential store, normally `~/.config/doubletake/credentials.json`.
+Credentials are passed from the widget to its helper over standard input and then to the running doubletake process through a private FIFO. They are never placed in command-line arguments. Doubletake stores successful pairing credentials in its own credential store, normally `~/.config/doubletake/credentials.json`.
 
 ## Firewall
 
@@ -111,11 +111,11 @@ Enable **Keep receiver ports open** in Settings to retain the receiver-specific 
 
 ## Settings
 
-- **Doubletake arguments:** extra CLI arguments saved under the plugin's Omarchy configuration. The plugin reserves `-daemonize`, `-socket`, and `-port-range` because it manages those values.
+- **Doubletake arguments:** optional performance settings saved under the plugin's Omarchy configuration. Allowed options are `-bitrate`, `-fps`, `-hwaccel`, `-target-latency-ms`, `-no-audio`, `-no-cursor`, and `-pair`. Connection, credential, encryption, capture-source, socket, and port options are rejected because the plugin manages those values.
 - **Keep receiver ports open:** retains receiver-specific UFW rules to avoid future firewall password prompts.
 - **VA-API status:** reports whether the GStreamer `vah264enc` element is available.
 
-Plugin settings are stored in `~/.config/omarchy/screen-mirroring/`. Runtime files use `$XDG_RUNTIME_DIR/omarchy-screen-mirroring/`. Doubletake logs are written to `~/.cache/omarchy-screen-mirroring/doubletake.log`.
+Plugin settings are stored in `~/.config/omarchy/screen-mirroring/`. Runtime files use the owner-only `$XDG_RUNTIME_DIR/omarchy-screen-mirroring/` directory, falling back to `/run/user/$UID/omarchy-screen-mirroring/` when the environment variable is unavailable. The plugin refuses shared or incorrectly owned runtime directories. Doubletake logs are written to `~/.cache/omarchy-screen-mirroring/doubletake.log`.
 
 ## Troubleshooting
 
@@ -132,7 +132,7 @@ journalctl --user -u xdg-desktop-portal-hyprland.service -f
 
 ## Remove
 
-Stop any active stream before removing the plugin. If permanent ports were enabled, turn that setting off first so the plugin removes its retained rules.
+Stop any active stream before removing the plugin. **Before uninstalling, open Settings and disable “Keep receiver ports open”** so the plugin removes every retained firewall rule. Removing the plugin first prevents it from performing that cleanup.
 
 ```sh
 omarchy plugin remove spacexrace.screen-mirroring --yes

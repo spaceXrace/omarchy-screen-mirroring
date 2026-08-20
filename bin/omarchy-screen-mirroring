@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 PLUGIN_ID="spacexrace.screen-mirroring"
 DOUBLETAKE_PORT_RANGE="60000-60010"
 UFW_PORT_RANGE="60000:60010"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/screen-mirroring"
-STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/omarchy-screen-mirroring"
+RUNTIME_ROOT="${XDG_RUNTIME_DIR:-/run/user/$UID}"
+STATE_DIR="$RUNTIME_ROOT/omarchy-screen-mirroring"
 SETTINGS_FILE="$CONFIG_DIR/settings.json"
 PERMANENT_IPS_FILE="$CONFIG_DIR/permanent-ips"
 SOCKET="$STATE_DIR/doubletake.sock"
 PID_FILE="$STATE_DIR/doubletake.pid"
+PID_START_FILE="$STATE_DIR/doubletake.starttime"
 STREAM_PID_FILE="$STATE_DIR/stream.pid"
 STREAM_PGID_FILE="$STATE_DIR/stream.pgid"
+STREAM_START_FILE="$STATE_DIR/stream.starttime"
 STREAM_IP_FILE="$STATE_DIR/stream.ip"
 STREAM_INPUT_FILE="$STATE_DIR/stream.input"
 STREAM_LOG_MARK_FILE="$STATE_DIR/stream.log-offset"
@@ -28,6 +32,38 @@ import json, sys
 print(json.dumps({"ok": False, "error": sys.argv[1]}))
 PY
   exit 1
+}
+
+ensure_private_state_dir() {
+  python - "$RUNTIME_ROOT" <<'PY'
+import os, stat, sys
+
+root = sys.argv[1]
+uid = os.getuid()
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+try:
+    root_fd = os.open(root, flags)
+    root_stat = os.fstat(root_fd)
+    if root_stat.st_uid != uid or root_stat.st_mode & 0o077:
+        raise PermissionError("runtime root must be owned by the current user and have mode 0700")
+
+    try:
+        os.mkdir("omarchy-screen-mirroring", mode=0o700, dir_fd=root_fd)
+    except FileExistsError:
+        pass
+
+    state_fd = os.open("omarchy-screen-mirroring", flags, dir_fd=root_fd)
+    state_stat = os.fstat(state_fd)
+    if state_stat.st_uid != uid:
+        raise PermissionError("runtime state directory is not owned by the current user")
+    os.fchmod(state_fd, 0o700)
+    os.close(state_fd)
+    os.close(root_fd)
+except (OSError, PermissionError) as error:
+    print(error, file=sys.stderr)
+    sys.exit(1)
+PY
 }
 
 settings_value() {
@@ -73,14 +109,102 @@ try:
 except ValueError as error:
     print(error, file=sys.stderr)
     sys.exit(2)
-managed = {"-daemonize", "-socket", "-port-range"}
-for arg in args:
-    if arg in managed or any(arg.startswith(option + "=") for option in managed):
-        print("extra arguments cannot override " + arg.split("=", 1)[0], file=sys.stderr)
+
+boolean_options = {"-no-audio", "-no-cursor", "-pair"}
+value_options = {
+    "-bitrate": ("integer", 0, 100000),
+    "-fps": ("integer", 1, 240),
+    "-hwaccel": ("choice", {"auto", "nvenc", "vaapi", "none"}),
+    "-target-latency-ms": ("integer", 0, 60000),
+}
+
+validated = []
+index = 0
+while index < len(args):
+    arg = args[index]
+    option, separator, inline_value = arg.partition("=")
+    if option in boolean_options:
+        if separator:
+            print(option + " does not accept a value", file=sys.stderr)
+            sys.exit(2)
+        validated.append(option)
+        index += 1
+        continue
+    if option not in value_options:
+        print("extra argument is not allowed: " + option, file=sys.stderr)
         sys.exit(2)
-for arg in args:
+    if separator:
+        value = inline_value
+    else:
+        index += 1
+        if index >= len(args):
+            print(option + " requires a value", file=sys.stderr)
+            sys.exit(2)
+        value = args[index]
+    if "\n" in value or "\r" in value:
+        print(option + " contains an invalid newline", file=sys.stderr)
+        sys.exit(2)
+    rule = value_options[option]
+    if rule[0] == "integer":
+        try:
+            number = int(value)
+        except ValueError:
+            print(option + " requires an integer", file=sys.stderr)
+            sys.exit(2)
+        if not rule[1] <= number <= rule[2]:
+            print(option + " is outside the allowed range", file=sys.stderr)
+            sys.exit(2)
+    elif value not in rule[1]:
+        print(option + " has an invalid value", file=sys.stderr)
+        sys.exit(2)
+    validated.extend((option, value))
+    index += 1
+
+for arg in validated:
     print(arg)
 PY
+}
+
+parse_extra_args() {
+  local raw=$1 output
+  local -n destination=$2
+  output="$(managed_extra_args "$raw")" || json_error "Invalid extra arguments"
+  destination=()
+  [[ -z "$output" ]] || mapfile -t destination <<< "$output"
+}
+
+process_starttime() {
+  local pid=$1
+  python - "$pid" <<'PY'
+import sys
+try:
+    with open("/proc/" + sys.argv[1] + "/stat", encoding="utf-8") as f:
+        stat = f.read()
+    fields = stat[stat.rfind(")") + 2:].split()
+    print(fields[19])
+except (OSError, IndexError, ValueError):
+    sys.exit(1)
+PY
+}
+
+record_process_identity() {
+  local pid=$1 pid_file=$2 start_file=$3 starttime
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  starttime="$(process_starttime "$pid")" || return 1
+  printf '%s\n' "$pid" > "$pid_file"
+  printf '%s\n' "$starttime" > "$start_file"
+}
+
+process_matches() {
+  local pid_file=$1 start_file=$2 pid saved_start current_start executable
+  [[ -f "$pid_file" && -f "$start_file" ]] || return 1
+  pid="$(<"$pid_file")"
+  saved_start="$(<"$start_file")"
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$saved_start" =~ ^[0-9]+$ ]] || return 1
+  current_start="$(process_starttime "$pid")" || return 1
+  [[ "$current_start" == "$saved_start" ]] || return 1
+  executable="$(readlink -f "/proc/$pid/exe")" || return 1
+  [[ "${executable##*/}" == "doubletake" ]]
 }
 
 deps() {
@@ -141,11 +265,11 @@ daemon_running() {
 }
 
 stream_running() {
-  [[ -f "$STREAM_PID_FILE" ]] && kill -0 "$(<"$STREAM_PID_FILE")" 2>/dev/null
+  process_matches "$STREAM_PID_FILE" "$STREAM_START_FILE"
 }
 
 stream_group_running() {
-  [[ -f "$STREAM_PGID_FILE" ]] && kill -0 -- "-$(<"$STREAM_PGID_FILE")" 2>/dev/null
+  stream_running && [[ "$(<"$STREAM_PGID_FILE")" == "$(<"$STREAM_PID_FILE")" ]] && kill -0 -- "-$(<"$STREAM_PGID_FILE")" 2>/dev/null
 }
 
 terminate_stream_processes() {
@@ -168,12 +292,12 @@ ensure_daemon() {
   local -a args=(doubletake -daemonize -socket "$SOCKET" -port-range "$DOUBLETAKE_PORT_RANGE")
   if [[ -n "$extra" ]]; then
     local -a parsed=()
-    mapfile -t parsed < <(managed_extra_args "$extra") || json_error "Invalid extra arguments"
+    parse_extra_args "$extra" parsed
     args+=("${parsed[@]}")
   fi
   mkdir -p "$(dirname "$LOG_FILE")"
   "${args[@]}" >>"$LOG_FILE" 2>&1 &
-  printf '%s\n' "$!" > "$PID_FILE"
+  record_process_identity "$!" "$PID_FILE" "$PID_START_FILE" || json_error "Unable to identify doubletake daemon"
   for _ in {1..20}; do
     daemon_running && return
     sleep 0.15
@@ -204,7 +328,13 @@ open_firewall() {
   local ip=$1
   ip="$(validate_ip "$ip")" || json_error "Receiver IP is invalid"
   "$PKEXEC" "$UFW" allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null
-  "$PKEXEC" "$UFW" allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null
+  if ! "$PKEXEC" "$UFW" allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null; then
+    if ! "$PKEXEC" "$UFW" --force delete allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null; then
+      queue_port_cleanup "$ip"
+      json_error "Unable to open the TCP firewall rule; the UDP rule still requires cleanup"
+    fi
+    json_error "Unable to open the TCP firewall rule; the UDP rule was rolled back"
+  fi
 }
 
 close_firewall() {
@@ -268,7 +398,7 @@ cleanup_finished_stream() {
   local ip=""
   [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
   [[ -z "$ip" ]] || queue_port_cleanup "$ip"
-  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_START_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
   attempt_port_cleanup || true
 }
 
@@ -345,7 +475,7 @@ disconnect_stream() {
     if stream_running || stream_group_running; then terminate_stream_processes KILL; fi
   fi
   [[ -z "$ip" ]] || queue_port_cleanup "$ip"
-  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_START_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
   attempt_port_cleanup || true
   status
 }
@@ -355,10 +485,10 @@ shutdown_if_idle() {
   local state
   state="$(doubletake-ctl -socket "$SOCKET" status | python -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))' 2>/dev/null || true)"
   [[ "$state" == "idle" ]] || return 0
-  if [[ -f "$PID_FILE" ]]; then
+  if process_matches "$PID_FILE" "$PID_START_FILE"; then
     kill "$(<"$PID_FILE")" 2>/dev/null || true
+    rm -f "$PID_FILE" "$PID_START_FILE" "$SOCKET"
   fi
-  rm -f "$PID_FILE" "$SOCKET"
 }
 
 status() {
@@ -383,7 +513,7 @@ print(json.dumps({"ok": True, "state": state, "streams": [stream], "lastReceiver
 PY
     return
   fi
-  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_START_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
   if daemon_running; then
     local response
     response="$(ctl status)"
@@ -404,9 +534,13 @@ PY
   fi
 }
 
+ensure_private_state_dir || json_error "Unable to create a private runtime state directory"
+
 case "${1:-}" in
   deps) deps ;;
   save-extra-args)
+    parsed=()
+    parse_extra_args "${2:-}" parsed
     save_settings extraArgs "${2:-}"
     shutdown_if_idle
     status
@@ -431,7 +565,8 @@ case "${1:-}" in
     extra="$(settings_value extraArgs)"
     args=(doubletake -target "$ip" -port-range "$DOUBLETAKE_PORT_RANGE")
     if [[ -n "$extra" ]]; then
-      mapfile -t parsed < <(managed_extra_args "$extra") || json_error "Invalid extra arguments"
+      parsed=()
+      parse_extra_args "$extra" parsed
       args+=("${parsed[@]}")
     fi
     mkdir -p "$(dirname "$LOG_FILE")"
@@ -441,21 +576,25 @@ case "${1:-}" in
     exec {stream_input_fd}<>"$STREAM_INPUT_FILE"
     setsid "${args[@]}" <"$STREAM_INPUT_FILE" >>"$LOG_FILE" 2>&1 &
     exec {stream_input_fd}>&-
-    printf '%s\n' "$!" > "$STREAM_PID_FILE"
+    if ! record_process_identity "$!" "$STREAM_PID_FILE" "$STREAM_START_FILE"; then
+      close_ports_after_connection "$ip" || true
+      rm -f "$STREAM_INPUT_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+      json_error "Unable to identify doubletake stream"
+    fi
     printf '%s\n' "$!" > "$STREAM_PGID_FILE"
     printf '%s\n' "$ip" > "$STREAM_IP_FILE"
     sleep 0.2
     if ! stream_running; then
       close_ports_after_connection "$ip"
       terminate_stream_processes
-      rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+      rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_START_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
       json_error "doubletake exited before screen capture started"
     fi
     status
     ;;
   credential)
     ip=${2:-}
-    credential=${3:-}
+    IFS= read -r credential || credential=""
     [[ -n "$ip" && -n "$credential" ]] || json_error "Receiver and credential are required"
     [[ -p "$STREAM_INPUT_FILE" && "$(<"$STREAM_IP_FILE")" == "$ip" ]] || json_error "No stream is waiting for a credential"
     printf '%s\n' "$credential" > "$STREAM_INPUT_FILE"
