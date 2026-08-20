@@ -39,6 +39,7 @@ gst-plugin-va
 libva-utils
 libpulse
 pipewire
+util-linux
 xdg-desktop-portal
 xdg-desktop-portal-hyprland
 xdg-terminal-exec
@@ -65,7 +66,7 @@ Open the widget and select **Install dependencies** if anything is missing. The 
 
 ```sh
 omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
-  gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire \
+  gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire util-linux \
   xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec \
   ufw polkit python
 omarchy pkg aur add doubletake
@@ -105,7 +106,7 @@ Credentials are passed from the widget to its helper over standard input and the
 
 Doubletake reserves local ports `60000-60010`. The widget validates the receiver IP and asks Polkit to run the system-owned `/usr/bin/ufw` executable with fixed TCP and UDP rules restricted to that address. Rules are tagged with `spacexrace.screen-mirroring-<IP>` so cleanup removes only rules owned by this plugin.
 
-By default, rules are removed after disconnect, failed setup, or an unexpected stream exit. If Polkit authentication is dismissed or cleanup fails, the panel displays **Remove leftover firewall rules**.
+Before opening a temporary rule, the helper records its receiver in a durable, owner-only cleanup ledger under `~/.config/omarchy/screen-mirroring/`. A detached supervisor removes the rules when doubletake exits even if the widget is disabled or unloaded. Interrupted cleanup is retried once on the next shell start; if Polkit authentication is dismissed or cleanup still fails, the panel displays **Remove leftover firewall rules**.
 
 Enable **Keep receiver ports open** in Settings to retain the receiver-specific rules after the first approval. Turning it off removes all retained plugin-owned rules.
 
@@ -115,7 +116,7 @@ Enable **Keep receiver ports open** in Settings to retain the receiver-specific 
 - **Keep receiver ports open:** retains receiver-specific UFW rules to avoid future firewall password prompts.
 - **VA-API status:** reports whether the GStreamer `vah264enc` element is available.
 
-Plugin settings are stored in `~/.config/omarchy/screen-mirroring/`. Runtime files use the owner-only `$XDG_RUNTIME_DIR/omarchy-screen-mirroring/` directory, falling back to `/run/user/$UID/omarchy-screen-mirroring/` when the environment variable is unavailable. The plugin refuses shared or incorrectly owned runtime directories. Doubletake logs are written to `~/.cache/omarchy-screen-mirroring/doubletake.log`.
+Plugin settings and the durable firewall-cleanup ledger are stored in `~/.config/omarchy/screen-mirroring/`. Runtime files use the owner-only `$XDG_RUNTIME_DIR/omarchy-screen-mirroring/` directory, falling back to `/run/user/$UID/omarchy-screen-mirroring/` when the environment variable is unavailable. The plugin refuses shared or incorrectly owned runtime directories. Doubletake logs are written with owner-only permissions to `~/.cache/omarchy-screen-mirroring/doubletake.log`.
 
 ## Troubleshooting
 
@@ -132,10 +133,22 @@ journalctl --user -u xdg-desktop-portal-hyprland.service -f
 
 ## Remove
 
-Stop any active stream before removing the plugin. **Before uninstalling, open Settings and disable “Keep receiver ports open”** so the plugin removes every retained firewall rule. Removing the plugin first prevents it from performing that cleanup.
+Stop any active stream before removing the plugin. **Before uninstalling, open Settings and disable “Keep receiver ports open”** so the plugin removes every retained firewall rule. The stream supervisor remains responsible for temporary rules if the widget is unloaded during a stream.
 
 ```sh
 omarchy plugin remove spacexrace.screen-mirroring --yes
+```
+
+If the plugin was removed before cleanup completed, recover the recorded receiver IPs and delete only this plugin's tagged rules:
+
+```sh
+{
+  python -c 'import json,pathlib; p=pathlib.Path.home()/".config/omarchy/screen-mirroring/pending-cleanup.json"; print(*(json.loads(p.read_text()) if p.exists() else []), sep="\n")'
+  sed -n '/./p' ~/.config/omarchy/screen-mirroring/permanent-ips 2>/dev/null || true
+} | sort -u | while IFS= read -r ip; do
+  sudo /usr/bin/ufw --force delete allow from "$ip" proto udp to any port 60000:60010 comment "spacexrace.screen-mirroring-$ip"
+  sudo /usr/bin/ufw --force delete allow from "$ip" proto tcp to any port 60000:60010 comment "spacexrace.screen-mirroring-$ip"
+done
 ```
 
 ## Development
@@ -144,6 +157,7 @@ omarchy plugin remove spacexrace.screen-mirroring --yes
 omarchy plugin validate .
 qmllint -I "$OMARCHY_PATH/shell" BarWidget.qml Panel.qml
 bash -n bin/omarchy-screen-mirroring
+tests/security-tests.sh
 ```
 
 ## License

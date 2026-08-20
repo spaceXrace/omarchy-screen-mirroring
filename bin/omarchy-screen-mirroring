@@ -10,6 +10,7 @@ RUNTIME_ROOT="${XDG_RUNTIME_DIR:-/run/user/$UID}"
 STATE_DIR="$RUNTIME_ROOT/omarchy-screen-mirroring"
 SETTINGS_FILE="$CONFIG_DIR/settings.json"
 PERMANENT_IPS_FILE="$CONFIG_DIR/permanent-ips"
+PENDING_CLEANUP_FILE="$CONFIG_DIR/pending-cleanup.json"
 SOCKET="$STATE_DIR/doubletake.sock"
 PID_FILE="$STATE_DIR/doubletake.pid"
 PID_START_FILE="$STATE_DIR/doubletake.starttime"
@@ -20,11 +21,16 @@ STREAM_IP_FILE="$STATE_DIR/stream.ip"
 STREAM_INPUT_FILE="$STATE_DIR/stream.input"
 STREAM_LOG_MARK_FILE="$STATE_DIR/stream.log-offset"
 STREAM_CREDENTIAL_SUBMITTED_FILE="$STATE_DIR/stream.credential-submitted"
-CLEANUP_IP_FILE="$STATE_DIR/cleanup.ip"
+LEGACY_CLEANUP_IP_FILE="$STATE_DIR/cleanup.ip"
 CLEANUP_IN_PROGRESS_FILE="$STATE_DIR/cleanup.in-progress"
+CLEANUP_ATTEMPTED_FILE="$STATE_DIR/cleanup.attempted"
+OPERATION_LOCK_FILE="$STATE_DIR/operation.lock"
 LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-screen-mirroring/doubletake.log"
 PKEXEC=/usr/bin/pkexec
 UFW=/usr/bin/ufw
+FLOCK=/usr/bin/flock
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+FIREWALL_RULES_MAY_EXIST=false
 
 json_error() {
   python - "$1" <<'PY'
@@ -64,6 +70,120 @@ except (OSError, PermissionError) as error:
     print(error, file=sys.stderr)
     sys.exit(1)
 PY
+}
+
+lock_operations() {
+  [[ -x "$FLOCK" ]] || json_error "flock is not installed"
+  exec 9>"$OPERATION_LOCK_FILE"
+  "$FLOCK" -x 9
+}
+
+update_pending_cleanup() {
+  local action=$1 ip=${2:-}
+  mkdir -p "$CONFIG_DIR"
+  python - "$PENDING_CLEANUP_FILE" "$action" "$ip" <<'PY'
+import ipaddress, json, os, stat, sys, tempfile
+
+path, action, raw_ip = sys.argv[1:]
+directory = os.path.dirname(path)
+
+def canonical(value):
+    return str(ipaddress.ip_address(value))
+
+def load_values():
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return []
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+            raise PermissionError("pending cleanup state is not a private regular file")
+        with os.fdopen(fd, encoding="utf-8") as stream:
+            data = json.load(stream)
+        fd = -1
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if not isinstance(data, list):
+        raise ValueError("pending cleanup state must be a JSON list")
+    return sorted(set(canonical(value) for value in data))
+
+def persist(values):
+    if not values:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+    else:
+        fd, temporary = tempfile.mkstemp(dir=directory, prefix=".pending-cleanup-")
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                fd = -1
+                json.dump(values, stream)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+values = load_values()
+if action == "add":
+    values = sorted(set(values + [canonical(raw_ip)]))
+    persist(values)
+elif action == "remove":
+    target = canonical(raw_ip)
+    persist([value for value in values if value != target])
+elif action == "list":
+    for value in values:
+        print(value)
+else:
+    raise ValueError("unknown pending cleanup action")
+PY
+}
+
+pending_cleanup_add() {
+  update_pending_cleanup add "$1"
+  rm -f "$CLEANUP_ATTEMPTED_FILE"
+}
+
+pending_cleanup_remove() {
+  update_pending_cleanup remove "$1"
+}
+
+pending_cleanup_list() {
+  update_pending_cleanup list
+}
+
+pending_cleanup_has_entries() {
+  [[ -f "$PENDING_CLEANUP_FILE" ]]
+}
+
+migrate_legacy_cleanup_state() {
+  [[ -f "$LEGACY_CLEANUP_IP_FILE" ]] || return 0
+  local ip
+  ip="$(<"$LEGACY_CLEANUP_IP_FILE")"
+  ip="$(validate_ip "$ip")" || json_error "Stored receiver IP is invalid"
+  pending_cleanup_add "$ip"
+  rm -f "$LEGACY_CLEANUP_IP_FILE"
+}
+
+prepare_log_file() {
+  mkdir -p "$(dirname "$LOG_FILE")"
+  : >> "$LOG_FILE"
+  chmod 600 "$LOG_FILE"
 }
 
 settings_value() {
@@ -195,16 +315,21 @@ record_process_identity() {
   printf '%s\n' "$starttime" > "$start_file"
 }
 
-process_matches() {
-  local pid_file=$1 start_file=$2 pid saved_start current_start executable
-  [[ -f "$pid_file" && -f "$start_file" ]] || return 1
-  pid="$(<"$pid_file")"
-  saved_start="$(<"$start_file")"
+process_identity_matches() {
+  local pid=$1 saved_start=$2 current_start executable
   [[ "$pid" =~ ^[1-9][0-9]*$ && "$saved_start" =~ ^[0-9]+$ ]] || return 1
   current_start="$(process_starttime "$pid")" || return 1
   [[ "$current_start" == "$saved_start" ]] || return 1
   executable="$(readlink -f "/proc/$pid/exe")" || return 1
   [[ "${executable##*/}" == "doubletake" ]]
+}
+
+process_matches() {
+  local pid_file=$1 start_file=$2 pid saved_start
+  [[ -f "$pid_file" && -f "$start_file" ]] || return 1
+  pid="$(<"$pid_file")"
+  saved_start="$(<"$start_file")"
+  process_identity_matches "$pid" "$saved_start"
 }
 
 deps() {
@@ -214,12 +339,12 @@ import json, shutil, subprocess
 official = [
     "gstreamer", "gst-plugins-base", "gst-plugins-good", "gst-plugins-bad",
     "gst-plugins-ugly", "gst-libav", "gst-plugin-va", "libva-utils",
-    "libpulse", "pipewire", "xdg-desktop-portal",
+    "libpulse", "pipewire", "util-linux", "xdg-desktop-portal",
     "xdg-desktop-portal-hyprland", "xdg-terminal-exec", "ufw", "polkit", "python",
 ]
 aur = ["doubletake"]
 commands = [
-    "doubletake", "doubletake-ctl", "gst-inspect-1.0", "pactl", "pipewire",
+    "doubletake", "doubletake-ctl", "flock", "gst-inspect-1.0", "pactl", "pipewire",
     "python", "ufw", "pkexec", "vainfo", "xdg-terminal-exec",
 ]
 
@@ -295,8 +420,8 @@ ensure_daemon() {
     parse_extra_args "$extra" parsed
     args+=("${parsed[@]}")
   fi
-  mkdir -p "$(dirname "$LOG_FILE")"
-  "${args[@]}" >>"$LOG_FILE" 2>&1 &
+  prepare_log_file
+  "${args[@]}" >>"$LOG_FILE" 2>&1 9>&- &
   record_process_identity "$!" "$PID_FILE" "$PID_START_FILE" || json_error "Unable to identify doubletake daemon"
   for _ in {1..20}; do
     daemon_running && return
@@ -327,22 +452,32 @@ PY
 open_firewall() {
   local ip=$1
   ip="$(validate_ip "$ip")" || json_error "Receiver IP is invalid"
-  "$PKEXEC" "$UFW" allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null
+  FIREWALL_RULES_MAY_EXIST=true
+  if ! "$PKEXEC" "$UFW" allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null; then
+    json_error "Unable to open the UDP firewall rule; firewall cleanup may still be required"
+  fi
   if ! "$PKEXEC" "$UFW" allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null; then
     if ! "$PKEXEC" "$UFW" --force delete allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$(firewall_comment "$ip")" >/dev/null; then
-      queue_port_cleanup "$ip"
       json_error "Unable to open the TCP firewall rule; the UDP rule still requires cleanup"
     fi
+    FIREWALL_RULES_MAY_EXIST=false
+    pending_cleanup_remove "$ip"
     json_error "Unable to open the TCP firewall rule; the UDP rule was rolled back"
   fi
 }
 
 close_firewall() {
-  local ip=$1 comment
-  ip="$(validate_ip "$ip")" || json_error "Receiver IP is invalid"
+  local ip=$1 comment failed=false
+  ip="$(validate_ip "$ip")" || return 1
   comment="$(firewall_comment "$ip")"
-  "$PKEXEC" "$UFW" --force delete allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$comment" >/dev/null
-  "$PKEXEC" "$UFW" --force delete allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$comment" >/dev/null
+  if ! "$PKEXEC" "$UFW" --force delete allow from "$ip" proto udp to any port "$UFW_PORT_RANGE" comment "$comment" >/dev/null; then
+    failed=true
+  fi
+  if ! "$PKEXEC" "$UFW" --force delete allow from "$ip" proto tcp to any port "$UFW_PORT_RANGE" comment "$comment" >/dev/null; then
+    failed=true
+  fi
+  [[ "$failed" == "true" ]] || FIREWALL_RULES_MAY_EXIST=false
+  [[ "$failed" == "false" ]]
 }
 
 permanent_ports_enabled() {
@@ -361,36 +496,68 @@ mark_permanent_ip() {
 open_ports_for_connection() {
   local ip=$1
   if permanent_ports_enabled && permanent_ip_exists "$ip"; then return; fi
+  pending_cleanup_add "$ip"
   open_firewall "$ip"
-  if permanent_ports_enabled; then mark_permanent_ip "$ip"; fi
+  if permanent_ports_enabled; then
+    mark_permanent_ip "$ip"
+    pending_cleanup_remove "$ip"
+  fi
 }
 
 close_ports_after_connection() {
   local ip=$1
-  permanent_ports_enabled && permanent_ip_exists "$ip" && return
-  close_firewall "$ip"
+  if permanent_ports_enabled && permanent_ip_exists "$ip"; then
+    pending_cleanup_remove "$ip"
+    return
+  fi
+  close_firewall "$ip" || return 1
+  pending_cleanup_remove "$ip"
 }
 
 queue_port_cleanup() {
-  mkdir -p "$STATE_DIR"
-  printf '%s\n' "$1" > "$CLEANUP_IP_FILE"
+  pending_cleanup_add "$1"
+}
+
+active_stream_uses_ip() {
+  local ip=$1
+  stream_running && [[ -f "$STREAM_IP_FILE" ]] && [[ "$(<"$STREAM_IP_FILE")" == "$ip" ]]
 }
 
 attempt_port_cleanup() {
-  [[ -f "$CLEANUP_IP_FILE" ]] || return 0
-  local ip
-  ip="$(<"$CLEANUP_IP_FILE")"
+  pending_cleanup_has_entries || return 0
+  local ip output failed=false
+  local -a pending_ips=()
+  output="$(pending_cleanup_list)" || return 1
+  [[ -z "$output" ]] || mapfile -t pending_ips <<< "$output"
   : > "$CLEANUP_IN_PROGRESS_FILE"
-  if close_ports_after_connection "$ip"; then
-    rm -f "$CLEANUP_IP_FILE" "$CLEANUP_IN_PROGRESS_FILE"
-    return 0
-  fi
+  for ip in "${pending_ips[@]}"; do
+    active_stream_uses_ip "$ip" && continue
+    if ! close_ports_after_connection "$ip"; then failed=true; fi
+  done
   rm -f "$CLEANUP_IN_PROGRESS_FILE"
+  pending_cleanup_has_entries || rm -f "$CLEANUP_ATTEMPTED_FILE"
+  [[ "$failed" == "false" ]]
+}
+
+pending_cleanup_required() {
+  pending_cleanup_has_entries || return 1
+  local ip output
+  output="$(pending_cleanup_list)" || return 0
+  while IFS= read -r ip; do
+    [[ -z "$ip" ]] && continue
+    active_stream_uses_ip "$ip" || return 0
+  done <<< "$output"
   return 1
 }
 
 cleanup_finished_stream() {
-  [[ -f "$STREAM_PID_FILE" ]] || return 0
+  if [[ ! -f "$STREAM_PID_FILE" ]]; then
+    if pending_cleanup_has_entries && [[ ! -f "$CLEANUP_ATTEMPTED_FILE" ]]; then
+      : > "$CLEANUP_ATTEMPTED_FILE"
+      attempt_port_cleanup || true
+    fi
+    return 0
+  fi
   stream_running && return 0
   terminate_stream_processes
   for _ in {1..20}; do stream_group_running || break; sleep 0.05; done
@@ -466,6 +633,49 @@ except Exception:
 PY
 }
 
+start_stream_supervisor() {
+  local pid=$1 starttime=$2 ip=$3
+  setsid "$SCRIPT_PATH" supervise "$pid" "$starttime" "$ip" </dev/null >>"$LOG_FILE" 2>&1 9>&- &
+}
+
+supervise_stream() {
+  local expected_pid=$1 expected_start=$2 expected_ip=$3
+  [[ "$expected_pid" =~ ^[1-9][0-9]*$ && "$expected_start" =~ ^[0-9]+$ ]] || return 1
+  expected_ip="$(validate_ip "$expected_ip")" || return 1
+
+  while process_identity_matches "$expected_pid" "$expected_start"; do sleep 1; done
+
+  lock_operations
+  if [[ -f "$STREAM_PID_FILE" && -f "$STREAM_START_FILE" ]] \
+    && [[ "$(<"$STREAM_PID_FILE")" == "$expected_pid" ]] \
+    && [[ "$(<"$STREAM_START_FILE")" == "$expected_start" ]]; then
+    cleanup_finished_stream
+  else
+    # Another stream may already have replaced this one. Cleanup skips any IP
+    # that is still owned by the active stream.
+    attempt_port_cleanup || true
+  fi
+}
+
+CONNECT_IP=""
+CONNECT_COMMITTED=false
+CONNECT_STARTED_PID=""
+
+cleanup_incomplete_connect() {
+  [[ "$CONNECT_COMMITTED" == "false" ]] || return 0
+  if [[ "$CONNECT_STARTED_PID" =~ ^[1-9][0-9]*$ ]]; then
+    kill -TERM -- "-$CONNECT_STARTED_PID" 2>/dev/null || kill -TERM "$CONNECT_STARTED_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$CONNECT_IP" ]]; then
+    if [[ "$FIREWALL_RULES_MAY_EXIST" == "true" ]]; then
+      close_ports_after_connection "$CONNECT_IP" || true
+    else
+      pending_cleanup_remove "$CONNECT_IP" || true
+    fi
+  fi
+  rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_START_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+}
+
 disconnect_stream() {
   local ip=""
   [[ -f "$STREAM_IP_FILE" ]] && ip="$(<"$STREAM_IP_FILE")"
@@ -494,7 +704,7 @@ shutdown_if_idle() {
 status() {
   cleanup_finished_stream
   local cleanup_required=false
-  if [[ -f "$CLEANUP_IP_FILE" && ! -f "$CLEANUP_IN_PROGRESS_FILE" ]]; then cleanup_required=true; fi
+  if [[ ! -f "$CLEANUP_IN_PROGRESS_FILE" ]] && pending_cleanup_required; then cleanup_required=true; fi
   if stream_running; then
     local ip name connection_state connection_state_raw credential_kind
     ip="$(<"$STREAM_IP_FILE")"
@@ -534,9 +744,17 @@ PY
   fi
 }
 
-ensure_private_state_dir || json_error "Unable to create a private runtime state directory"
+main() {
+  ensure_private_state_dir || json_error "Unable to create a private runtime state directory"
+  case "${1:-}" in
+    deps|supervise) ;;
+    *)
+      lock_operations
+      migrate_legacy_cleanup_state
+      ;;
+  esac
 
-case "${1:-}" in
+  case "${1:-}" in
   deps) deps ;;
   save-extra-args)
     parsed=()
@@ -558,6 +776,11 @@ case "${1:-}" in
       name="$(settings_value lastReceiverName)"
     fi
     if [[ -z "$name" ]]; then name="$(device_name_for_ip "$ip")"; fi
+    CONNECT_IP=$ip
+    CONNECT_COMMITTED=false
+    CONNECT_STARTED_PID=""
+    FIREWALL_RULES_MAY_EXIST=false
+    trap cleanup_incomplete_connect EXIT
     shutdown_if_idle
     open_ports_for_connection "$ip"
     save_settings lastReceiver "$ip"
@@ -569,37 +792,56 @@ case "${1:-}" in
       parse_extra_args "$extra" parsed
       args+=("${parsed[@]}")
     fi
-    mkdir -p "$(dirname "$LOG_FILE")"
+    prepare_log_file
     rm -f "$STREAM_INPUT_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
     mkfifo "$STREAM_INPUT_FILE"
     stat -c %s "$LOG_FILE" 2>/dev/null > "$STREAM_LOG_MARK_FILE" || printf 0 > "$STREAM_LOG_MARK_FILE"
     exec {stream_input_fd}<>"$STREAM_INPUT_FILE"
-    setsid "${args[@]}" <"$STREAM_INPUT_FILE" >>"$LOG_FILE" 2>&1 &
+    setsid "${args[@]}" <"$STREAM_INPUT_FILE" >>"$LOG_FILE" 2>&1 9>&- &
+    CONNECT_STARTED_PID=$!
     exec {stream_input_fd}>&-
-    if ! record_process_identity "$!" "$STREAM_PID_FILE" "$STREAM_START_FILE"; then
-      close_ports_after_connection "$ip" || true
-      rm -f "$STREAM_INPUT_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
+    if ! record_process_identity "$CONNECT_STARTED_PID" "$STREAM_PID_FILE" "$STREAM_START_FILE"; then
       json_error "Unable to identify doubletake stream"
     fi
-    printf '%s\n' "$!" > "$STREAM_PGID_FILE"
+    printf '%s\n' "$CONNECT_STARTED_PID" > "$STREAM_PGID_FILE"
     printf '%s\n' "$ip" > "$STREAM_IP_FILE"
     sleep 0.2
     if ! stream_running; then
-      close_ports_after_connection "$ip"
-      terminate_stream_processes
-      rm -f "$STREAM_PID_FILE" "$STREAM_PGID_FILE" "$STREAM_START_FILE" "$STREAM_IP_FILE" "$STREAM_INPUT_FILE" "$STREAM_LOG_MARK_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
       json_error "doubletake exited before screen capture started"
     fi
+    start_stream_supervisor "$CONNECT_STARTED_PID" "$(<"$STREAM_START_FILE")" "$ip"
+    CONNECT_COMMITTED=true
+    trap - EXIT
     status
     ;;
   credential)
     ip=${2:-}
     IFS= read -r credential || credential=""
     [[ -n "$ip" && -n "$credential" ]] || json_error "Receiver and credential are required"
-    [[ -p "$STREAM_INPUT_FILE" && "$(<"$STREAM_IP_FILE")" == "$ip" ]] || json_error "No stream is waiting for a credential"
-    printf '%s\n' "$credential" > "$STREAM_INPUT_FILE"
+    [[ -p "$STREAM_INPUT_FILE" && -f "$STREAM_IP_FILE" && "$(<"$STREAM_IP_FILE")" == "$ip" ]] || json_error "No stream is waiting for a credential"
+    stream_running || json_error "No stream is waiting for a credential"
+    if ! python -c '
+import os, sys
+path = sys.argv[1]
+data = sys.stdin.buffer.readline(4097)
+if len(data) > 4096:
+    raise SystemExit("credential is too long")
+if not data.endswith(b"\n"):
+    data += b"\n"
+fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+try:
+    if os.write(fd, data) != len(data):
+        raise OSError("short credential write")
+finally:
+    os.close(fd)
+' "$STREAM_INPUT_FILE" <<< "$credential"; then
+      json_error "Unable to submit the credential"
+    fi
     : > "$STREAM_CREDENTIAL_SUBMITTED_FILE"
     status
+    ;;
+  supervise)
+    supervise_stream "${2:-}" "${3:-}" "${4:-}"
     ;;
   disconnect) disconnect_stream ;;
   close-ports)
@@ -610,12 +852,19 @@ case "${1:-}" in
     enabled=${2:-false}
     [[ "$enabled" == "true" || "$enabled" == "false" ]] || json_error "Invalid permanent ports setting"
     if [[ "$enabled" == "false" && -f "$PERMANENT_IPS_FILE" ]]; then
+      cleanup_failed=false
       while IFS= read -r ip; do
         [[ -z "$ip" ]] || {
           ip="$(validate_ip "$ip")" || json_error "Stored receiver IP is invalid"
-          close_firewall "$ip"
+          queue_port_cleanup "$ip"
+          if close_firewall "$ip"; then
+            pending_cleanup_remove "$ip"
+          else
+            cleanup_failed=true
+          fi
         }
       done < "$PERMANENT_IPS_FILE"
+      [[ "$cleanup_failed" == "false" ]] || json_error "Unable to remove all retained firewall rules"
       rm -f "$PERMANENT_IPS_FILE"
     fi
     save_settings permanentPorts "$enabled"
@@ -624,4 +873,9 @@ case "${1:-}" in
   shutdown-if-idle) shutdown_if_idle ;;
   status) status ;;
   *) json_error "Unknown command: ${1:-}" ;;
-esac
+  esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

@@ -64,6 +64,9 @@ Panel {
     process.command = [helper].concat(args)
     process.running = true
   }
+  function safeRemoteText(value, maximumLength) {
+    return Model.safeRemoteText(value, maximumLength)
+  }
   function refreshPanel() {
     if (depsInstalled) scanning = true
     run(depsProc, ["deps"])
@@ -93,19 +96,19 @@ Panel {
       var stream = streams[i]
       if (stream.state === "streaming") {
         streaming = true
-        connectedReceiver = stream.device || stream.device_ip || "Receiver"
+        connectedReceiver = safeRemoteText(stream.device || stream.device_ip || "Receiver", 160)
         connectedIp = stream.device_ip || ""
       }
       if (stream.state === "connecting") connecting = true
       if (stream.state === "connecting" && !connectedReceiver) {
-        connectedReceiver = stream.device || stream.device_ip || "Receiver"
+        connectedReceiver = safeRemoteText(stream.device || stream.device_ip || "Receiver", 160)
         connectedIp = stream.device_ip || ""
       }
       if (stream.state === "pin_required" || stream.credential_kind) {
         connecting = true
         credentialTarget = stream.device_ip || ""
         credentialKind = stream.credential_kind || "pin"
-        if (!connectedReceiver) connectedReceiver = stream.device || stream.device_ip || "Receiver"
+        if (!connectedReceiver) connectedReceiver = safeRemoteText(stream.device || stream.device_ip || "Receiver", 160)
       }
     }
     streamActive = streaming || connecting || credentialTarget !== ""
@@ -117,12 +120,12 @@ Panel {
     if (receiverIndex >= devices.length) receiverIndex = Math.max(0, devices.length - 1)
   }
   function installDependencies() {
-    Quickshell.execDetached(["xdg-terminal-exec", "--hold", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec ufw polkit python && omarchy pkg aur add doubletake"])
+    Quickshell.execDetached(["xdg-terminal-exec", "--hold", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire util-linux xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec ufw polkit python && omarchy pkg aur add doubletake"])
   }
   function connectReceiver(ip, name) {
     if (!ip || busy) return
     busy = true
-    run(actionProc, ["connect", ip, name || ""])
+    run(actionProc, ["connect", ip, safeRemoteText(name, 160)])
   }
   function receiverNameForIp(ip) {
     for (var i = 0; i < devices.length; i++) {
@@ -289,7 +292,7 @@ Panel {
               Layout.fillWidth: true
               spacing: Style.space(2)
               Text { Layout.fillWidth: true; text: "Screen Mirroring"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true; elide: Text.ElideRight }
-              Text { Layout.fillWidth: true; text: root.scanning ? "SCANNING FOR RECEIVERS" : (root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : (root.connecting ? "CONNECTING TO " + root.connectedReceiver.toUpperCase() : (root.devices.length === 0 ? "NO RECEIVERS FOUND" : "NOT CONNECTED")))); color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+              Text { Layout.fillWidth: true; text: root.scanning ? "SCANNING FOR RECEIVERS" : (root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : (root.connecting ? "CONNECTING TO " + root.connectedReceiver.toUpperCase() : (root.devices.length === 0 ? "NO RECEIVERS FOUND" : "NOT CONNECTED")))); textFormat: Text.PlainText; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
             }
             Button {
               iconText: "󰑐"
@@ -327,7 +330,7 @@ Panel {
             }
           }
 
-          Text { visible: root.errorText !== ""; Layout.fillWidth: true; text: root.errorText; color: root.urgent; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
+          Text { visible: root.errorText !== ""; Layout.fillWidth: true; text: root.errorText; textFormat: Text.PlainText; color: root.urgent; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
 
           ColumnLayout {
             visible: !root.depsInstalled
@@ -480,8 +483,8 @@ Panel {
         anchors.rightMargin: Style.space(8)
         anchors.verticalCenter: parent.verticalCenter
         spacing: Style.space(1)
-        Text { width: parent.width; text: receiver ? receiver.name : ""; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body; elide: Text.ElideRight }
-        Text { width: parent.width; text: Model.deviceSubtitle(receiver); color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+        Text { width: parent.width; text: receiver ? root.safeRemoteText(receiver.name, 160) : ""; textFormat: Text.PlainText; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body; elide: Text.ElideRight }
+        Text { width: parent.width; text: Model.deviceSubtitle(receiver); textFormat: Text.PlainText; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
       }
       Text { id: receiverState; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: active ? "Mirroring" : ""; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
     }

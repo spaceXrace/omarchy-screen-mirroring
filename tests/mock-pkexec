@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "$MOCK_UFW_LOG"
+command_line="$*"
+
+if [[ "${MOCK_REQUIRE_PENDING:-false}" == "true" && "$command_line" == *" allow from "* ]]; then
+  ip=${command_line#* allow from }
+  ip=${ip%% *}
+  python - "$PENDING_CLEANUP_FILE" "$ip" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    pending = json.load(stream)
+raise SystemExit(0 if sys.argv[2] in pending else 1)
+PY
+fi
+
+if [[ "${MOCK_FAIL_TCP_ALLOW:-false}" == "true" && "$command_line" == *" allow from "* && "$command_line" == *" proto tcp "* ]]; then
+  exit 1
+fi
+
+if [[ "${MOCK_FAIL_UDP_DELETE:-false}" == "true" && "$command_line" == *" delete allow "* && "$command_line" == *" proto udp "* ]]; then
+  exit 1
+fi
+
+exit 0
