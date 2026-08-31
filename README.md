@@ -73,6 +73,7 @@ omarchy plugin add https://github.com/spaceXrace/omarchy-screen-mirroring --enab
 6. Use the hero icon or switch to stop mirroring.
 
 The hero displays the receiver name while connecting and streaming. When idle, its icon and switch reconnect to the last receiver.
+The screen or window choice is requested again for every connection; the plugin does not reuse a previous portal selection.
 
 ## Keyboard Controls
 

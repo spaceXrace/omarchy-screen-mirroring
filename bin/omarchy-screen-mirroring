@@ -6,6 +6,7 @@ PLUGIN_ID="spacexrace.screen-mirroring"
 DOUBLETAKE_PORT_RANGE="60000-60010"
 UFW_PORT_RANGE="60000:60010"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/screen-mirroring"
+DOUBLETAKE_CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/doubletake/credentials.json"
 RUNTIME_ROOT="${XDG_RUNTIME_DIR:-/run/user/$UID}"
 STATE_DIR="$RUNTIME_ROOT/omarchy-screen-mirroring"
 SETTINGS_FILE="$CONFIG_DIR/settings.json"
@@ -290,6 +291,67 @@ finally:
         os.unlink(temporary)
     except FileNotFoundError:
         pass
+PY
+}
+
+clear_portal_restore_tokens() {
+  [[ -e "$DOUBLETAKE_CREDENTIALS_FILE" || -L "$DOUBLETAKE_CREDENTIALS_FILE" ]] || return 0
+  python - "$DOUBLETAKE_CREDENTIALS_FILE" <<'PY'
+import json, os, stat, sys, tempfile
+
+path = sys.argv[1]
+directory = os.path.dirname(path)
+uid = os.getuid()
+
+directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    directory_info = os.fstat(directory_fd)
+    if directory_info.st_uid != uid or directory_info.st_mode & 0o022:
+        raise PermissionError("doubletake credential directory must be owned by the current user and not writable by other users")
+
+    credential_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        credential_info = os.fstat(credential_fd)
+        if credential_info.st_uid != uid or not stat.S_ISREG(credential_info.st_mode) or credential_info.st_mode & 0o077:
+            raise PermissionError("doubletake credentials are not a private regular file")
+        with os.fdopen(credential_fd, encoding="utf-8") as stream:
+            credential_fd = -1
+            data = json.load(stream)
+    finally:
+        if credential_fd >= 0:
+            os.close(credential_fd)
+
+    if not isinstance(data, dict):
+        raise ValueError("doubletake credentials must be a JSON object")
+
+    changed = False
+    for receiver in data.values():
+        if isinstance(receiver, dict) and "restore_token" in receiver:
+            del receiver["restore_token"]
+            changed = True
+    if not changed:
+        raise SystemExit(0)
+
+    temporary_fd, temporary = tempfile.mkstemp(dir=directory, prefix=".credentials-")
+    try:
+        os.fchmod(temporary_fd, 0o600)
+        with os.fdopen(temporary_fd, "w", encoding="utf-8") as stream:
+            temporary_fd = -1
+            json.dump(data, stream)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        os.fsync(directory_fd)
+    finally:
+        if temporary_fd >= 0:
+            os.close(temporary_fd)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+finally:
+    os.close(directory_fd)
 PY
 }
 
@@ -769,6 +831,7 @@ main() {
     FIREWALL_RULES_MAY_EXIST=false
     trap cleanup_incomplete_connect EXIT
     shutdown_if_idle
+    clear_portal_restore_tokens || json_error "Unable to reset the saved screen selection"
     open_ports_for_connection "$ip"
     save_settings lastReceiver "$ip"
     save_settings lastReceiverName "$name"

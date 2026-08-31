@@ -112,6 +112,19 @@ with open(sys.argv[1], encoding="utf-8") as stream:
 raise SystemExit(1 if "extraArgs" in data else 0)
 PY
 
+# Each connection forgets only the portal source so the chooser always opens.
+mkdir -p "$(dirname "$DOUBLETAKE_CREDENTIALS_FILE")"
+chmod 700 "$(dirname "$DOUBLETAKE_CREDENTIALS_FILE")"
+printf '%s\n' '{"receiver":{"seed":"keep-me","restore_token":"discard-me"}}' > "$DOUBLETAKE_CREDENTIALS_FILE"
+chmod 600 "$DOUBLETAKE_CREDENTIALS_FILE"
+clear_portal_restore_tokens
+python - "$DOUBLETAKE_CREDENTIALS_FILE" <<'PY' || fail "portal restore token was not removed safely"
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    receiver = json.load(stream)["receiver"]
+raise SystemExit(0 if receiver == {"seed": "keep-me"} else 1)
+PY
+
 # Credentials are accepted only while Doubletake is explicitly requesting one.
 credential_guard="$(sed -n '/  credential)/,/  supervise)/p' "$REPOSITORY_ROOT/bin/omarchy-screen-mirroring")"
 grep -Fq 'stream_connection_state' <<< "$credential_guard" || fail "credential state guard is missing"
