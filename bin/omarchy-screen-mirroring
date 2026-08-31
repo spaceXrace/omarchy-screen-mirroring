@@ -72,6 +72,40 @@ except (OSError, PermissionError) as error:
 PY
 }
 
+ensure_private_persistent_state() {
+  python - "$CONFIG_DIR" "$(dirname "$LOG_FILE")" "$SETTINGS_FILE" "$PERMANENT_IPS_FILE" "$PENDING_CLEANUP_FILE" <<'PY'
+import os, stat, sys
+
+uid = os.getuid()
+directories = sys.argv[1:3]
+files = sys.argv[3:]
+
+for directory in directories:
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != uid:
+            raise PermissionError(directory + " is not owned by the current user")
+        os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+
+for path in files:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        continue
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != uid or not stat.S_ISREG(info.st_mode):
+            raise PermissionError(path + " is not a private regular file")
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+PY
+}
+
 lock_operations() {
   [[ -x "$FLOCK" ]] || json_error "flock is not installed"
   exec 9>"$OPERATION_LOCK_FILE"
@@ -181,9 +215,19 @@ migrate_legacy_cleanup_state() {
 }
 
 prepare_log_file() {
-  mkdir -p "$(dirname "$LOG_FILE")"
-  : >> "$LOG_FILE"
-  chmod 600 "$LOG_FILE"
+  python - "$LOG_FILE" <<'PY'
+import os, stat, sys
+
+path = sys.argv[1]
+fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+try:
+    info = os.fstat(fd)
+    if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+        raise PermissionError("log is not a private regular file")
+    os.fchmod(fd, 0o600)
+finally:
+    os.close(fd)
+PY
 }
 
 settings_value() {
@@ -746,6 +790,7 @@ PY
 
 main() {
   ensure_private_state_dir || json_error "Unable to create a private runtime state directory"
+  ensure_private_persistent_state || json_error "Unable to create private persistent state directories"
   case "${1:-}" in
     deps|supervise) ;;
     *)
@@ -820,6 +865,7 @@ main() {
     [[ -n "$ip" && -n "$credential" ]] || json_error "Receiver and credential are required"
     [[ -p "$STREAM_INPUT_FILE" && -f "$STREAM_IP_FILE" && "$(<"$STREAM_IP_FILE")" == "$ip" ]] || json_error "No stream is waiting for a credential"
     stream_running || json_error "No stream is waiting for a credential"
+    [[ "$(stream_connection_state)" == pin_required* ]] || json_error "The stream is not requesting a credential"
     if ! python -c '
 import os, sys
 path = sys.argv[1]

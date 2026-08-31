@@ -16,6 +16,7 @@ chmod 700 "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
 source "$REPOSITORY_ROOT/bin/omarchy-screen-mirroring"
 
 ensure_private_state_dir
+ensure_private_persistent_state
 lock_operations
 PKEXEC="$REPOSITORY_ROOT/tests/mock-pkexec"
 export PENDING_CLEANUP_FILE
@@ -88,5 +89,21 @@ grep -Fq "delete allow from 192.0.2.40" "$MOCK_UFW_LOG" || fail "supervisor did 
 # Every receiver-controlled Text item is explicitly plain text, and names are sanitized.
 grep -Fq 'textFormat: Text.PlainText' "$REPOSITORY_ROOT/Panel.qml" || fail "plain-text QML hardening is missing"
 grep -Fq '.replace(/[<>]/g, "")' "$REPOSITORY_ROOT/Model.js" || fail "receiver text sanitization is missing"
+
+# Persistent state rejects symlinks and repairs overly broad directory modes.
+chmod 755 "$CONFIG_DIR" "$(dirname "$LOG_FILE")"
+ensure_private_persistent_state
+[[ "$(stat -c %a "$CONFIG_DIR")" == 700 ]] || fail "config directory permissions were not repaired"
+[[ "$(stat -c %a "$(dirname "$LOG_FILE")")" == 700 ]] || fail "cache directory permissions were not repaired"
+ln -s "$TEST_ROOT/symlink-target" "$SETTINGS_FILE"
+ensure_private_persistent_state >/dev/null 2>&1 && fail "settings symlink was accepted"
+rm -f "$SETTINGS_FILE"
+ln -s "$TEST_ROOT/symlink-target" "$LOG_FILE"
+prepare_log_file >/dev/null 2>&1 && fail "log symlink was accepted"
+rm -f "$LOG_FILE"
+
+# Credentials are accepted only while Doubletake is explicitly requesting one.
+credential_guard="$(sed -n '/  credential)/,/  supervise)/p' "$REPOSITORY_ROOT/bin/omarchy-screen-mirroring")"
+grep -Fq 'stream_connection_state' <<< "$credential_guard" || fail "credential state guard is missing"
 
 printf 'security tests passed\n'
