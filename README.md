@@ -19,6 +19,8 @@ An Omarchy Quattro bar widget for mirroring a Linux desktop to compatible receiv
 
 ## Requirements
 
+All required dependencies can be installed automatically from within the plugin.
+
 - Omarchy Quattro with the Omarchy shell.
 - A receiver supported by doubletake.
 - A working PipeWire screen-cast portal.
@@ -56,20 +58,10 @@ doubletake
 
 The dependency check also verifies `doubletake`, `doubletake-ctl`, `pactl`, `pipewire`, `pkexec`, `ufw`, `vainfo`, `xdg-terminal-exec`, and the required `pipewiresrc` and `h264parse` GStreamer elements. VA-API availability is reported separately by checking `vah264enc`.
 
-## Install
+## Installation
 
 ```sh
-omarchy plugin add https://github.com/spaceXrace/omarchy-screen-mirroring --enable --yes
-```
-
-Open the widget and select **Install dependencies** if anything is missing. The installer uses Omarchy's package commands:
-
-```sh
-omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
-  gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire util-linux \
-  xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec \
-  ufw polkit python
-omarchy pkg aur add doubletake
+omarchy plugin add https://github.com/spaceXrace/omarchy-screen-mirroring --enable
 ```
 
 ## Usage
