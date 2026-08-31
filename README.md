@@ -10,7 +10,7 @@ An Omarchy Quattro bar widget for mirroring a Linux desktop to compatible receiv
 - Mirrors a Wayland screen or window selected through the desktop portal.
 - Shows connecting, credential, streaming, failure, and firewall-cleanup states.
 - Reconnects to the last receiver from the hero icon or on/off switch.
-- Supports one-time pairing PINs and configured receiver passwords.
+- Supports one-time pairing PINs.
 - Remembers additional doubletake arguments, such as `-hwaccel vaapi`.
 - Opens tagged, receiver-specific UFW rules for TCP and UDP ports `60000:60010`.
 - Can retain rules per receiver to avoid repeated Polkit authentication.
@@ -70,7 +70,7 @@ omarchy plugin add https://github.com/spaceXrace/omarchy-screen-mirroring --enab
 2. Select a receiver.
 3. Approve the receiver-specific firewall rules through the Polkit dialog when requested.
 4. Select a screen or window in the desktop portal.
-5. Enter a PIN or configured receiver password in the panel if doubletake requests one.
+5. Enter the pairing PIN shown by the receiver if doubletake requests one.
 6. Use the hero icon or switch to stop mirroring.
 
 The hero displays the receiver name while connecting and streaming. When idle, its icon and switch reconnect to the last receiver.
@@ -83,16 +83,13 @@ The hero displays the receiver name while connecting and streaming. When idle, i
 - `w`: start or stop mirroring.
 - `Escape`: close the panel.
 
-Credential and argument text fields receive normal keyboard input while focused. Pressing Enter submits a PIN or password.
+Credential and argument text fields receive normal keyboard input while focused. Pressing Enter submits a pairing PIN.
 
 ## Credentials
 
-Doubletake supports both credential modes exposed by the widget:
-
 - **Pairing PIN:** a temporary code displayed by the receiver.
-- **Configured password:** the static password configured in the receiver's screen-mirroring settings.
 
-Credentials are passed from the widget to its helper over standard input and then to the running doubletake process through a private FIFO. They are never placed in command-line arguments. Doubletake stores successful pairing credentials in its own credential store, normally `~/.config/doubletake/credentials.json`.
+Pairing PINs are passed from the widget to its helper over standard input and then to the running doubletake process through a private FIFO. They are never placed in command-line arguments. Doubletake stores successful pairing credentials in its own credential store, normally `~/.config/doubletake/credentials.json`.
 
 ## Firewall
 
