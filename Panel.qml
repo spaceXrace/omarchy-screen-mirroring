@@ -118,7 +118,7 @@ Panel {
     if (receiverIndex >= devices.length) receiverIndex = Math.max(0, devices.length - 1)
   }
   function installDependencies() {
-    Quickshell.execDetached(["xdg-terminal-exec", "--hold", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire util-linux xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec ufw polkit python && omarchy pkg aur add doubletake-git"])
+    Quickshell.execDetached(["xdg-terminal-exec", "--hold", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire util-linux xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec ufw polkit python && { ! pacman -Q doubletake >/dev/null 2>&1 || sudo pacman -R --noconfirm doubletake; } && omarchy pkg aur add doubletake-git"])
   }
   function connectReceiver(ip, name) {
     if (!ip || busy) return
