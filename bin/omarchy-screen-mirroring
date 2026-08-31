@@ -342,7 +342,7 @@ official = [
     "libpulse", "pipewire", "util-linux", "xdg-desktop-portal",
     "xdg-desktop-portal-hyprland", "xdg-terminal-exec", "ufw", "polkit", "python",
 ]
-aur = ["doubletake"]
+aur = ["doubletake-git"]
 commands = [
     "doubletake", "doubletake-ctl", "flock", "gst-inspect-1.0", "pactl", "pipewire",
     "python", "ufw", "pkexec", "vainfo", "xdg-terminal-exec",

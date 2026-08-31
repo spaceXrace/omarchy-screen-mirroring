@@ -118,7 +118,7 @@ Panel {
     if (receiverIndex >= devices.length) receiverIndex = Math.max(0, devices.length - 1)
   }
   function installDependencies() {
-    Quickshell.execDetached(["xdg-terminal-exec", "--hold", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire util-linux xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec ufw polkit python && omarchy pkg aur add doubletake"])
+    Quickshell.execDetached(["xdg-terminal-exec", "--hold", "bash", "-lc", "omarchy pkg add gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-va libva-utils libpulse pipewire util-linux xdg-desktop-portal xdg-desktop-portal-hyprland xdg-terminal-exec ufw polkit python && omarchy pkg aur add doubletake-git"])
   }
   function connectReceiver(ip, name) {
     if (!ip || busy) return
@@ -335,7 +335,7 @@ Panel {
             spacing: Style.space(8)
             PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
             PanelSectionHeader { text: "DEPENDENCIES"; foreground: root.foreground; fontFamily: root.fontFamily }
-            Text { Layout.fillWidth: true; text: "Install GStreamer and VA-API packages from the official repositories, plus doubletake from the AUR. The installer uses Omarchy's package commands."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
+            Text { Layout.fillWidth: true; text: "Install GStreamer and VA-API packages from the official repositories, plus doubletake-git from the AUR. The installer uses Omarchy's package commands."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             Text { visible: root.missingDependencies !== ""; Layout.fillWidth: true; text: "Missing: " + root.missingDependencies; color: root.urgent; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
             Button { Layout.fillWidth: true; text: "Install dependencies (includes AUR)"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.installDependencies() }
           }

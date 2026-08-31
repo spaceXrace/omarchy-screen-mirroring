@@ -52,7 +52,7 @@ python
 ### AUR Package
 
 ```text
-doubletake
+doubletake-git
 ```
 
 The dependency check also verifies `doubletake`, `doubletake-ctl`, `pactl`, `pipewire`, `pkexec`, `ufw`, `vainfo`, `xdg-terminal-exec`, and the required `pipewiresrc` and `h264parse` GStreamer elements. VA-API availability is reported separately by checking `vah264enc`.
