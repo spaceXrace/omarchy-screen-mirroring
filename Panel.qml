@@ -133,10 +133,10 @@ Panel {
     return ""
   }
   function disconnect() {
-    if (actionProc.running) return
+    if (actionProc.running || disconnecting) return
     busy = true
     disconnecting = true
-    run(actionProc, ["disconnect"])
+    disconnectStartTimer.restart()
   }
   function toggleStream() {
     if (streamActive) disconnect()
@@ -190,6 +190,18 @@ Panel {
     running: true
     repeat: true
     onTriggered: root.run(statusProc, ["status"])
+  }
+  Timer {
+    id: disconnectStartTimer
+    interval: 50
+    repeat: false
+    onTriggered: {
+      if (actionProc.running) {
+        root.disconnecting = false
+        return
+      }
+      root.run(actionProc, ["disconnect"])
+    }
   }
   Timer {
     id: refreshTimer
