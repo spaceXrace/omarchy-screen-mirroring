@@ -129,4 +129,7 @@ PY
 credential_guard="$(sed -n '/  credential)/,/  supervise)/p' "$REPOSITORY_ROOT/bin/omarchy-screen-mirroring")"
 grep -Fq 'stream_connection_state' <<< "$credential_guard" || fail "credential state guard is missing"
 
+# Wayland capture must avoid Doubletake's problematic VA DMA-BUF import path.
+grep -Fq 'LIBVA_DRIVER_NAME=disabled' "$REPOSITORY_ROOT/bin/omarchy-screen-mirroring" || fail "VA DMA-BUF workaround is missing"
+
 printf 'security tests passed\n'

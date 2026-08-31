@@ -841,7 +841,12 @@ main() {
     mkfifo "$STREAM_INPUT_FILE"
     stat -c %s "$LOG_FILE" 2>/dev/null > "$STREAM_LOG_MARK_FILE" || printf 0 > "$STREAM_LOG_MARK_FILE"
     exec {stream_input_fd}<>"$STREAM_INPUT_FILE"
-    setsid "${args[@]}" <"$STREAM_INPUT_FILE" >>"$LOG_FILE" 2>&1 9>&- &
+    # Doubletake inserts vapostproc whenever it can be probed. On hybrid/AMD
+    # Wayland systems that makes the portal negotiate a DMA-BUF modifier which
+    # the VA import path can retain indefinitely, starving screencopy and
+    # producing a black stream. Disable VA only for this process so capture
+    # negotiates system memory; auto selection can still use the Vulkan encoder.
+    setsid env LIBVA_DRIVER_NAME=disabled "${args[@]}" <"$STREAM_INPUT_FILE" >>"$LOG_FILE" 2>&1 9>&- &
     CONNECT_STARTED_PID=$!
     exec {stream_input_fd}>&-
     if ! record_process_identity "$CONNECT_STARTED_PID" "$STREAM_PID_FILE" "$STREAM_START_FILE"; then

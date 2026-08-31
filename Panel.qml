@@ -20,6 +20,7 @@ Panel {
   property bool connecting: false
   property bool streamActive: false
   property bool busy: false
+  property bool disconnecting: false
   property string connectedReceiver: ""
   property string connectedIp: ""
   property string lastReceiver: ""
@@ -134,6 +135,7 @@ Panel {
   function disconnect() {
     if (actionProc.running) return
     busy = true
+    disconnecting = true
     run(actionProc, ["disconnect"])
   }
   function toggleStream() {
@@ -237,6 +239,7 @@ Panel {
     onExited: {
       root.pendingCredential = ""
       root.applyStatus(actionOut.text)
+      root.disconnecting = false
       root.run(statusProc, ["status"])
     }
   }
@@ -289,7 +292,7 @@ Panel {
               Layout.fillWidth: true
               spacing: Style.space(2)
               Text { Layout.fillWidth: true; text: "Screen Mirroring"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true; elide: Text.ElideRight }
-              Text { Layout.fillWidth: true; text: root.scanning ? "SCANNING FOR RECEIVERS" : (root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : (root.connecting ? "CONNECTING TO " + root.connectedReceiver.toUpperCase() : (root.devices.length === 0 ? "NO RECEIVERS FOUND" : "NOT CONNECTED")))); textFormat: Text.PlainText; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+              Text { Layout.fillWidth: true; text: root.disconnecting ? "DISCONNECTING…" : (root.scanning ? "SCANNING FOR RECEIVERS" : (root.streaming ? "MIRRORING TO " + root.connectedReceiver.toUpperCase() : (root.credentialTarget ? "WAITING FOR " + root.connectedReceiver.toUpperCase() : (root.connecting ? "CONNECTING TO " + root.connectedReceiver.toUpperCase() : (root.devices.length === 0 ? "NO RECEIVERS FOUND" : "NOT CONNECTED"))))); textFormat: Text.PlainText; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
             }
             Button {
               iconText: "󰑐"
@@ -309,7 +312,7 @@ Panel {
               ToggleSwitch {
                 id: powerSwitch
                 anchors.fill: parent
-                checked: root.streamActive
+                checked: root.streamActive && !root.disconnecting
                 interactive: false
                 cursorRing: true
                 hasCursor: switchMouse.containsMouse || (root.cursorActive && root.focusSection === "header" && root.headerIndex === 1)
@@ -319,11 +322,12 @@ Panel {
                 id: switchMouse
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
+                cursorShape: root.disconnecting ? Qt.BusyCursor : Qt.PointingHandCursor
+                enabled: !root.disconnecting
                 onContainsMouseChanged: if (containsMouse) { root.cursorActive = false; root.focusSection = "header"; root.headerIndex = 1 }
                 onClicked: root.toggleStream()
               }
-              PanelToolTip { visible: switchMouse.containsMouse; text: root.streamActive ? "Stop mirroring" : "Mirror to last receiver"; fontFamily: root.fontFamily }
+              PanelToolTip { visible: switchMouse.containsMouse; text: root.disconnecting ? "Disconnecting…" : (root.streamActive ? "Stop mirroring" : "Mirror to last receiver"); fontFamily: root.fontFamily }
             }
           }
 
