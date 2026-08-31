@@ -102,6 +102,16 @@ ln -s "$TEST_ROOT/symlink-target" "$LOG_FILE"
 prepare_log_file >/dev/null 2>&1 && fail "log symlink was accepted"
 rm -f "$LOG_FILE"
 
+# Arguments from older installations are removed and cannot affect new streams.
+printf '%s\n' '{"extraArgs":"-fps 60 -hwaccel vaapi","permanentPorts":"false"}' > "$SETTINGS_FILE"
+remove_legacy_extra_args
+python - "$SETTINGS_FILE" <<'PY' || fail "legacy arguments were not removed"
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    data = json.load(stream)
+raise SystemExit(1 if "extraArgs" in data else 0)
+PY
+
 # Credentials are accepted only while Doubletake is explicitly requesting one.
 credential_guard="$(sed -n '/  credential)/,/  supervise)/p' "$REPOSITORY_ROOT/bin/omarchy-screen-mirroring")"
 grep -Fq 'stream_connection_state' <<< "$credential_guard" || fail "credential state guard is missing"

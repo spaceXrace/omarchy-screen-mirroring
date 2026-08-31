@@ -23,7 +23,6 @@ Panel {
   property string connectedReceiver: ""
   property string connectedIp: ""
   property string lastReceiver: ""
-  property string extraArgs: ""
   property string errorText: ""
   property string credentialTarget: ""
   property string credentialKind: ""
@@ -83,7 +82,6 @@ Panel {
     cleanupRequired = data.cleanupRequired === true
     errorText = data.error || (cleanupRequired ? "Temporary firewall rules remain after the stream stopped." : "")
     lastReceiver = data.lastReceiver || lastReceiver
-    if (!argsInput.activeFocus && !actionProc.running && data.extraArgs !== undefined) extraArgs = data.extraArgs
     permanentPorts = data.permanentPorts === true
     var streams = data.streams || []
     streaming = false
@@ -143,7 +141,6 @@ Panel {
     else if (lastReceiver) connectReceiver(lastReceiver, receiverNameForIp(lastReceiver))
     else errorText = "Choose a receiver first"
   }
-  function saveExtraArgs() { run(actionProc, ["save-extra-args", extraArgs]) }
   function savePermanentPorts(enabled) { run(actionProc, ["save-permanent-ports", enabled ? "true" : "false"]) }
   function closeLeftoverPorts() { run(actionProc, ["close-ports"]) }
   function submitCredential() {
@@ -258,7 +255,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: credentialInput.activeFocus || argsInput.activeFocus
+      blocked: credentialInput.activeFocus
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
@@ -388,15 +385,6 @@ Panel {
               Layout.fillWidth: true
               PanelSectionHeader { Layout.fillWidth: true; text: "SETTINGS"; foreground: root.foreground; fontFamily: root.fontFamily }
               Button { text: "Back"; bordered: true; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.showSettings = false }
-            }
-            PanelSectionHeader { text: "DOUBLETAKE ARGUMENTS"; foreground: root.foreground; fontFamily: root.fontFamily }
-            TextField {
-              id: argsInput
-              Layout.fillWidth: true
-              placeholderText: "For example: -hwaccel vaapi"
-              text: root.extraArgs
-              onTextEdited: root.extraArgs = text
-              onEditingFinished: root.saveExtraArgs()
             }
             Text { Layout.fillWidth: true; text: root.vaapiAvailable ? "VA-API encoder available" : "VA-API encoder not detected"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall }
             ColumnLayout {

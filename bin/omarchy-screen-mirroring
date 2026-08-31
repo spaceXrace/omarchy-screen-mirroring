@@ -264,77 +264,33 @@ os.replace(temporary, path)
 PY
 }
 
-managed_extra_args() {
-  local raw=$1
-  python - "$raw" <<'PY'
-import shlex, sys
+remove_legacy_extra_args() {
+  [[ -f "$SETTINGS_FILE" ]] || return 0
+  python - "$SETTINGS_FILE" <<'PY'
+import json, os, sys, tempfile
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as stream:
+    data = json.load(stream)
+if "extraArgs" not in data:
+    raise SystemExit(0)
+del data["extraArgs"]
+fd, temporary = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".settings-")
 try:
-    args = shlex.split(sys.argv[1])
-except ValueError as error:
-    print(error, file=sys.stderr)
-    sys.exit(2)
-
-boolean_options = {"-no-audio", "-no-cursor", "-pair"}
-value_options = {
-    "-bitrate": ("integer", 0, 100000),
-    "-fps": ("integer", 1, 240),
-    "-hwaccel": ("choice", {"auto", "nvenc", "vaapi", "none"}),
-    "-target-latency-ms": ("integer", 0, 60000),
-}
-
-validated = []
-index = 0
-while index < len(args):
-    arg = args[index]
-    option, separator, inline_value = arg.partition("=")
-    if option in boolean_options:
-        if separator:
-            print(option + " does not accept a value", file=sys.stderr)
-            sys.exit(2)
-        validated.append(option)
-        index += 1
-        continue
-    if option not in value_options:
-        print("extra argument is not allowed: " + option, file=sys.stderr)
-        sys.exit(2)
-    if separator:
-        value = inline_value
-    else:
-        index += 1
-        if index >= len(args):
-            print(option + " requires a value", file=sys.stderr)
-            sys.exit(2)
-        value = args[index]
-    if "\n" in value or "\r" in value:
-        print(option + " contains an invalid newline", file=sys.stderr)
-        sys.exit(2)
-    rule = value_options[option]
-    if rule[0] == "integer":
-        try:
-            number = int(value)
-        except ValueError:
-            print(option + " requires an integer", file=sys.stderr)
-            sys.exit(2)
-        if not rule[1] <= number <= rule[2]:
-            print(option + " is outside the allowed range", file=sys.stderr)
-            sys.exit(2)
-    elif value not in rule[1]:
-        print(option + " has an invalid value", file=sys.stderr)
-        sys.exit(2)
-    validated.extend((option, value))
-    index += 1
-
-for arg in validated:
-    print(arg)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        fd = -1
+        json.dump(data, stream)
+        stream.write("\n")
+    os.replace(temporary, path)
+finally:
+    if fd >= 0:
+        os.close(fd)
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
 PY
-}
-
-parse_extra_args() {
-  local raw=$1 output
-  local -n destination=$2
-  output="$(managed_extra_args "$raw")" || json_error "Invalid extra arguments"
-  destination=()
-  [[ -z "$output" ]] || mapfile -t destination <<< "$output"
 }
 
 process_starttime() {
@@ -456,14 +412,7 @@ ensure_daemon() {
   daemon_running && return
   mkdir -p "$STATE_DIR"
   rm -f "$SOCKET"
-  local extra
-  extra="$(settings_value extraArgs)"
   local -a args=(doubletake -daemonize -socket "$SOCKET" -port-range "$DOUBLETAKE_PORT_RANGE")
-  if [[ -n "$extra" ]]; then
-    local -a parsed=()
-    parse_extra_args "$extra" parsed
-    args+=("${parsed[@]}")
-  fi
   prepare_log_file
   "${args[@]}" >>"$LOG_FILE" 2>&1 9>&- &
   record_process_identity "$!" "$PID_FILE" "$PID_START_FILE" || json_error "Unable to identify doubletake daemon"
@@ -757,13 +706,13 @@ status() {
     connection_state="${connection_state_raw%% *}"
     credential_kind="${connection_state_raw#pin_required }"
     [[ "$connection_state" == pin_required* ]] || credential_kind=""
-    python - "$ip" "$name" "$connection_state" "$credential_kind" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
+    python - "$ip" "$name" "$connection_state" "$credential_kind" "$(settings_value lastReceiver)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
 import json, sys
 ip, name, state, credential_kind = sys.argv[1:5]
 stream = {"device": name or ip, "device_ip": ip, "state": state}
 if credential_kind:
     stream["credential_kind"] = credential_kind
-print(json.dumps({"ok": True, "state": state, "streams": [stream], "lastReceiver": sys.argv[5], "extraArgs": sys.argv[6], "permanentPorts": sys.argv[7] == "true", "cleanupRequired": sys.argv[8] == "true"}))
+print(json.dumps({"ok": True, "state": state, "streams": [stream], "lastReceiver": sys.argv[5], "permanentPorts": sys.argv[6] == "true", "cleanupRequired": sys.argv[7] == "true"}))
 PY
     return
   fi
@@ -771,19 +720,18 @@ PY
   if daemon_running; then
     local response
     response="$(ctl status)"
-    python - "$response" "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
+    python - "$response" "$(settings_value lastReceiver)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
 import json, sys
 data = json.loads(sys.argv[1])
 data["lastReceiver"] = sys.argv[2]
-data["extraArgs"] = sys.argv[3]
-data["permanentPorts"] = sys.argv[4] == "true"
-data["cleanupRequired"] = sys.argv[5] == "true"
+data["permanentPorts"] = sys.argv[3] == "true"
+data["cleanupRequired"] = sys.argv[4] == "true"
 print(json.dumps(data))
 PY
   else
-    python - "$(settings_value lastReceiver)" "$(settings_value extraArgs)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
+    python - "$(settings_value lastReceiver)" "$(settings_value permanentPorts)" "$cleanup_required" <<'PY'
 import json, sys
-print(json.dumps({"ok": True, "state": "idle", "streams": [], "lastReceiver": sys.argv[1], "extraArgs": sys.argv[2], "permanentPorts": sys.argv[3] == "true", "cleanupRequired": sys.argv[4] == "true"}))
+print(json.dumps({"ok": True, "state": "idle", "streams": [], "lastReceiver": sys.argv[1], "permanentPorts": sys.argv[2] == "true", "cleanupRequired": sys.argv[3] == "true"}))
 PY
   fi
 }
@@ -796,18 +744,12 @@ main() {
     *)
       lock_operations
       migrate_legacy_cleanup_state
+      remove_legacy_extra_args
       ;;
   esac
 
   case "${1:-}" in
   deps) deps ;;
-  save-extra-args)
-    parsed=()
-    parse_extra_args "${2:-}" parsed
-    save_settings extraArgs "${2:-}"
-    shutdown_if_idle
-    status
-    ;;
   discover)
     discover
     ;;
@@ -830,13 +772,7 @@ main() {
     open_ports_for_connection "$ip"
     save_settings lastReceiver "$ip"
     save_settings lastReceiverName "$name"
-    extra="$(settings_value extraArgs)"
     args=(doubletake -target "$ip" -port-range "$DOUBLETAKE_PORT_RANGE")
-    if [[ -n "$extra" ]]; then
-      parsed=()
-      parse_extra_args "$extra" parsed
-      args+=("${parsed[@]}")
-    fi
     prepare_log_file
     rm -f "$STREAM_INPUT_FILE" "$STREAM_CREDENTIAL_SUBMITTED_FILE"
     mkfifo "$STREAM_INPUT_FILE"

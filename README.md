@@ -11,7 +11,6 @@ An Omarchy Quattro bar widget for mirroring a Linux desktop to compatible receiv
 - Shows connecting, credential, streaming, failure, and firewall-cleanup states.
 - Reconnects to the last receiver from the hero icon or on/off switch.
 - Supports one-time pairing PINs.
-- Remembers additional doubletake arguments, such as `-hwaccel vaapi`.
 - Opens tagged, receiver-specific UFW rules for TCP and UDP ports `60000:60010`.
 - Can retain rules per receiver to avoid repeated Polkit authentication.
 - Cleans up temporary rules after disconnects, failures, and unexpected exits.
@@ -83,7 +82,7 @@ The hero displays the receiver name while connecting and streaming. When idle, i
 - `w`: start or stop mirroring.
 - `Escape`: close the panel.
 
-Credential and argument text fields receive normal keyboard input while focused. Pressing Enter submits a pairing PIN.
+The credential text field receives normal keyboard input while focused. Pressing Enter submits a pairing PIN.
 
 ## Credentials
 
@@ -101,7 +100,6 @@ Enable **Keep receiver ports open** in Settings to retain the receiver-specific 
 
 ## Settings
 
-- **Doubletake arguments:** optional performance settings saved under the plugin's Omarchy configuration. Allowed options are `-bitrate`, `-fps`, `-hwaccel`, `-target-latency-ms`, `-no-audio`, `-no-cursor`, and `-pair`. Connection, credential, encryption, capture-source, socket, and port options are rejected because the plugin manages those values.
 - **Keep receiver ports open:** retains receiver-specific UFW rules to avoid future firewall password prompts.
 - **VA-API status:** reports whether the GStreamer `vah264enc` element is available.
 
